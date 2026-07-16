@@ -16,6 +16,7 @@ from Controller.chatbot_controller import chatbot_bp
 from Controller.auth_controller import auth_bp
 from Controller.knowledge_controller import knowledge_bp
 from Controller.guardrails_controller import guardrails_bp
+from Controller.google_auth_controller import google_auth_bp
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -59,6 +60,7 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(knowledge_bp, url_prefix="/api/knowledge")
     app.register_blueprint(guardrails_bp, url_prefix="/api/guardrails")
+    app.register_blueprint(google_auth_bp, url_prefix="/auth/google")
     
     @app.route("/api/health")
     def health():

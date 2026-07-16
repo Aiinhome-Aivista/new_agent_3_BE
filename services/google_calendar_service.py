@@ -16,17 +16,25 @@ class GoogleCalendarService:
         if not Config.GOOGLE_CLIENT_ID or not Config.GOOGLE_CLIENT_SECRET:
             raise Exception("Google client configuration (GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET) is missing in environment.")
             
-        creds = None
-        # Look for token.json in workspace BE directory
         token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'token.json')
-        if os.path.exists(token_path):
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        if not os.path.exists(token_path):
+            raise Exception("Google Calendar is not connected. Please authenticate using /auth/google/login.")
+            
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
             
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    logger.info("Token expired. Refreshing automatically...")
+                    creds.refresh(Request())
+                    # Write the refreshed credentials back to token.json
+                    with open(token_path, 'w') as token_file:
+                        token_file.write(creds.to_json())
+                    logger.info("Token Refreshed")
+                except Exception as refresh_err:
+                    raise Exception(f"Google Calendar token refresh failed: {refresh_err}. Please authenticate using /auth/google/login.")
             else:
-                raise Exception(f"OAuth credentials file token.json not found or invalid at {token_path}, and cannot auto-refresh.")
+                raise Exception("Google Calendar is not connected. Please authenticate using /auth/google/login.")
                 
         return build('calendar', 'v3', credentials=creds)
 
