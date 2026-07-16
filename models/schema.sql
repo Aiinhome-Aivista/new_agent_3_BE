@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS meetings (
     title VARCHAR(255) NOT NULL,
     scheduled_at DATETIME NOT NULL,
     organizer_id INT,
+    description TEXT,
+    meeting_link VARCHAR(500),
     status ENUM('scheduled','completed','cancelled') DEFAULT 'scheduled',
     FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE,
     FOREIGN KEY (organizer_id) REFERENCES stakeholders(id) ON DELETE SET NULL

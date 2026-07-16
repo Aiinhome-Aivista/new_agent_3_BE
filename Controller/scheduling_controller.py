@@ -14,12 +14,39 @@ def create_meeting():
         
     try:
         query = """
-            INSERT INTO meetings (plan_id, title, scheduled_at, organizer_id)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO meetings (plan_id, title, scheduled_at, organizer_id, description, meeting_link)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
-        params = (data['plan_id'], data['title'], data['scheduled_at'], data.get('organizer_id'))
+        params = (
+            data['plan_id'], 
+            data['title'], 
+            data['scheduled_at'], 
+            data.get('organizer_id'),
+            data.get('description'),
+            data.get('meeting_link') or data.get('link')
+        )
         meeting_id = execute_write(query, params)
-        return jsonify({"success": True, "data": {"id": meeting_id}, "message": "Meeting created successfully"}), 201
+        
+        # Save optional attendee stakeholder IDs to attendance table
+        stakeholder_ids = data.get('stakeholder_ids') or data.get('attendees') or []
+        for sh_id in stakeholder_ids:
+            try:
+                execute_write(
+                    "INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)",
+                    (meeting_id, sh_id)
+                )
+            except Exception as att_err:
+                print(f"Error inserting attendance for stakeholder {sh_id}: {att_err}")
+
+        # Trigger background email notifications
+        from services.notification_service import trigger_meeting_notifications
+        trigger_meeting_notifications(meeting_id)
+
+        return jsonify({
+            "success": True, 
+            "data": {"id": meeting_id}, 
+            "message": "Meeting created successfully. Email notifications initiated."
+        }), 201
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
@@ -53,13 +80,14 @@ def update_meeting_status(id):
 @scheduling_bp.route('/meetings/<int:id>/notify', methods=['POST'])
 def notify_meeting(id):
     try:
-        # Simulate sending a notification
         query = "SELECT title, scheduled_at FROM meetings WHERE id = %s"
         meeting = execute_query(query, (id,))
         if not meeting:
             return jsonify({"success": False, "message": "Meeting not found"}), 404
             
-        print(f"NOTIFICATION SENT: Reminder for meeting '{meeting[0]['title']}' at {meeting[0]['scheduled_at']}")
+        # Trigger background email notifications
+        from services.notification_service import trigger_meeting_notifications
+        trigger_meeting_notifications(id)
         return jsonify({"success": True, "message": "Notification sent successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
