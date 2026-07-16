@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS stakeholders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
-    role ENUM('engagement_manager','outgoing_sme','incoming_member','leadership') NOT NULL,
+    role ENUM('engagement_manager','outgoing_sme','incoming_member','leadership', 'manager') NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
