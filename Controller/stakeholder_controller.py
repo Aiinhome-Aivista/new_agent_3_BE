@@ -18,7 +18,10 @@ def add_stakeholder():
         stakeholder_id = execute_write(query, params)
         return jsonify({"success": True, "data": {"id": stakeholder_id}, "message": "Stakeholder created successfully"}), 201
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+        error_msg = str(e)
+        if "1062" in error_msg and "Duplicate entry" in error_msg:
+            return jsonify({"success": False, "message": "Email already exists"}), 400
+        return jsonify({"success": False, "message": error_msg}), 500
 
 @stakeholder_bp.route('/', methods=['GET'])
 def get_all_stakeholders():
