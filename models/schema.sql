@@ -91,3 +91,21 @@ CREATE TABLE IF NOT EXISTS chat_history (
     answer TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    plan_id INT NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    chunk_count INT NOT NULL,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS guardrail_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    rail_type VARCHAR(50) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    reason TEXT,
+    endpoint VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
