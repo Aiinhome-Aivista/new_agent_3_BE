@@ -13,16 +13,22 @@ from Controller.risk_controller import risk_bp
 from Controller.assessment_controller import assessment_bp
 from Controller.reporting_controller import reporting_bp
 from Controller.chatbot_controller import chatbot_bp
+from Controller.auth_controller import auth_bp
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     
+    # Run Database Seeder
+    from db_seeder import seed_users
+    seed_users()
+
+    
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # Enable CORS
-    CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}})
+    CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://localhost:5174"]}})
     
     # Register Blueprints
     app.register_blueprint(stakeholder_bp, url_prefix="/api/stakeholders")
@@ -33,6 +39,7 @@ def create_app():
     app.register_blueprint(assessment_bp, url_prefix="/api/assessments")
     app.register_blueprint(reporting_bp, url_prefix="/api/reports")
     app.register_blueprint(chatbot_bp, url_prefix="/api/chat")
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
     
     @app.route("/api/health")
     def health():
