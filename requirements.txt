@@ -14,3 +14,6 @@ opentelemetry-sdk
 opentelemetry-instrumentation-flask
 opentelemetry-exporter-otlp
 setuptools<70.0.0
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
