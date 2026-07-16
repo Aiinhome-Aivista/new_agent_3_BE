@@ -1,8 +1,16 @@
 Flask==3.0.0
 flask-cors==4.0.0
-mysql-connector-python==8.2.0
+mysql-connector-python
 python-dotenv==1.0.0
 requests==2.31.0
 python-docx==1.0.1
 bcrypt==4.1.2
 PyJWT==2.8.0
+chromadb
+pypdf
+langgraph
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-flask
+opentelemetry-exporter-otlp
+setuptools<70.0.0

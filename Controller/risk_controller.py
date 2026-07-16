@@ -14,64 +14,8 @@ def detect_risks():
     plan_id = data['plan_id']
     
     try:
-        # Gather data for LLM
-        plan_query = "SELECT application_name, scope_description FROM kt_plans WHERE id = %s"
-        plan_data = execute_query(plan_query, (plan_id,))
-        
-        comp_query = "SELECT topic, completion_percent FROM completion_tracking WHERE plan_id = %s"
-        comp_data = execute_query(comp_query, (plan_id,))
-        
-        att_query = """
-            SELECT s.name, a.attended 
-            FROM attendance a
-            JOIN meetings m ON a.meeting_id = m.id
-            JOIN stakeholders s ON a.stakeholder_id = s.id
-            WHERE m.plan_id = %s
-        """
-        att_data = execute_query(att_query, (plan_id,))
-        
-        prompt = f"""
-        Analyze the following Knowledge Transfer (KT) data and identify potential risks.
-        
-        Plan Info: {plan_data[0] if plan_data else 'N/A'}
-        Topic Completions: {comp_data}
-        Attendance Records: {att_data}
-        
-        Identify up to 3 major risks. For each, assign a severity ('low', 'medium', 'high', 'critical').
-        Return ONLY a JSON array of objects with keys "description" (string) and "severity" (string).
-        """
-        
-        llm_response = call_llm(prompt)
-        
-        # Try to parse JSON from LLM
-        try:
-            # Strip markdown code blocks if any
-            clean_json = llm_response.replace('```json', '').replace('```', '').strip()
-            risks = json.loads(clean_json)
-        except json.JSONDecodeError:
-            # Fallback if parsing fails
-            risks = [{"description": "AI generated risk analysis failed to parse. Raw response: " + llm_response[:100], "severity": "medium"}]
-            
-        saved_risks = []
-        for risk in risks:
-            desc = risk.get('description', 'Unknown risk')
-            severity = risk.get('severity', 'medium').lower()
-            if severity not in ['low', 'medium', 'high', 'critical']:
-                severity = 'medium'
-                
-            query = """
-                INSERT INTO risks (plan_id, description, severity, detected_by)
-                VALUES (%s, %s, %s, 'ai')
-            """
-            risk_id = execute_write(query, (plan_id, desc, severity))
-            saved_risks.append({
-                "id": risk_id,
-                "description": desc,
-                "severity": severity,
-                "status": "open",
-                "detected_by": "ai"
-            })
-            
+        from services.risk_service import detect_risks_service
+        saved_risks = detect_risks_service(plan_id)
         return jsonify({"success": True, "data": saved_risks, "message": "Risks detected and logged"}), 200
         
     except Exception as e:
@@ -94,8 +38,8 @@ def get_risks():
 @risk_bp.route('/<int:id>/escalate', methods=['PUT'])
 def escalate_risk(id):
     try:
-        query = "UPDATE risks SET status = 'escalated' WHERE id = %s"
-        execute_write(query, (id,))
+        from services.risk_service import escalate_risk_service
+        escalate_risk_service(id)
         return jsonify({"success": True, "message": "Risk escalated"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

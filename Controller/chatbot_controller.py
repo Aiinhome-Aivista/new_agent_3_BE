@@ -13,14 +13,25 @@ def ask_chatbot():
         
     session_id = data['session_id']
     question = data['question']
+    plan_id = data.get('plan_id')
     
     try:
+        from rag_service import query_knowledge
+        
         # Fetch some recent context (lightweight RAG)
         # In a real app we'd use vector search or at least filter by keyword.
         # Here we just fetch the latest plan and active risks to ground it.
         plan_query = "SELECT application_name, scope_description FROM kt_plans ORDER BY created_at DESC LIMIT 1"
         plan = execute_query(plan_query)
         context_str = f"Context (Latest Plan): {plan[0] if plan else 'None'}."
+        
+        if plan_id:
+            chunks = query_knowledge(question, plan_id)
+            from guardrails import retrieval_rail
+            retrieval_passed, _ = retrieval_rail(chunks, endpoint="/api/chat/ask")
+            if chunks and retrieval_passed:
+                retrieved_context = "\n".join([chunk["text"] for chunk in chunks])
+                context_str = f"Retrieved Context:\n{retrieved_context}\n\n" + context_str
         
         prompt = f"""
         You are a helpful AI assistant for the Virtual KT Manager system.
@@ -32,7 +43,12 @@ def ask_chatbot():
         User Question: {question}
         """
         
-        answer = call_llm(prompt)
+        from guardrails import dialog_rail
+        dialog_passed, dialog_reason = dialog_rail(question, "/api/chat/ask")
+        if not dialog_passed:
+            answer = "I'm sorry, I am a specialized KT Manager assistant and can only answer questions related to KT plans, schedules, risks, or assessments."
+        else:
+            answer = call_llm(prompt)
         
         # Save to chat history
         query = "INSERT INTO chat_history (session_id, question, answer) VALUES (%s, %s, %s)"

@@ -49,8 +49,10 @@ def generate_questions():
 def submit_answer():
     data = request.json
     required = ['plan_id', 'stakeholder_id', 'question', 'answer']
-    if not all(field in data for field in required):
-        return jsonify({"success": False, "message": "Missing required fields"}), 400
+    from guardrails import input_rail
+    passed, reason = input_rail(data, required, "/api/assessments/submit")
+    if not passed:
+        return jsonify({"success": False, "message": reason}), 400
         
     try:
         prompt = f"""
@@ -72,6 +74,12 @@ def submit_answer():
         except:
             score = 5
             feedback = "AI could not parse score. Manual review needed."
+            
+        from guardrails import execution_rail
+        exec_passed, exec_reason = execution_rail("assessment_score", {"score": score}, "/api/assessments/submit")
+        if not exec_passed:
+            score = 0
+            feedback = f"Guardrail blocked score: {exec_reason}"
             
         query = """
             INSERT INTO assessments (plan_id, stakeholder_id, question, answer, ai_score, feedback)

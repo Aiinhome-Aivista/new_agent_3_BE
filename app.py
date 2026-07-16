@@ -14,6 +14,15 @@ from Controller.assessment_controller import assessment_bp
 from Controller.reporting_controller import reporting_bp
 from Controller.chatbot_controller import chatbot_bp
 from Controller.auth_controller import auth_bp
+from Controller.knowledge_controller import knowledge_bp
+from Controller.guardrails_controller import guardrails_bp
+
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 def create_app():
     app = Flask(__name__)
@@ -23,6 +32,14 @@ def create_app():
     from db_seeder import seed_users
     seed_users()
 
+    # Configure OpenTelemetry
+    resource = Resource.create({SERVICE_NAME: "kt-manager-backend"})
+    provider = TracerProvider(resource=resource)
+    exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    
+    FlaskInstrumentor().instrument_app(app)
     
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -40,6 +57,8 @@ def create_app():
     app.register_blueprint(reporting_bp, url_prefix="/api/reports")
     app.register_blueprint(chatbot_bp, url_prefix="/api/chat")
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
+    app.register_blueprint(knowledge_bp, url_prefix="/api/knowledge")
+    app.register_blueprint(guardrails_bp, url_prefix="/api/guardrails")
     
     @app.route("/api/health")
     def health():

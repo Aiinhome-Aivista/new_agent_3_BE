@@ -7,8 +7,10 @@ scheduling_bp = Blueprint('scheduling_bp', __name__)
 def create_meeting():
     data = request.json
     required_fields = ['plan_id', 'title', 'scheduled_at']
-    if not all(field in data for field in required_fields):
-        return jsonify({"success": False, "message": "Missing required fields"}), 400
+    from guardrails import input_rail
+    passed, reason = input_rail(data, required_fields, "/api/schedule/")
+    if not passed:
+        return jsonify({"success": False, "message": reason}), 400
         
     try:
         query = """

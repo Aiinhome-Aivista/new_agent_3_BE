@@ -7,8 +7,10 @@ stakeholder_bp = Blueprint('stakeholder_bp', __name__)
 def add_stakeholder():
     data = request.json
     required_fields = ['name', 'email', 'role']
-    if not all(field in data for field in required_fields):
-        return jsonify({"success": False, "message": "Missing required fields"}), 400
+    from guardrails import input_rail
+    passed, reason = input_rail(data, required_fields, "/api/stakeholders/")
+    if not passed:
+        return jsonify({"success": False, "message": reason}), 400
     
     try:
         query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
@@ -16,7 +18,10 @@ def add_stakeholder():
         stakeholder_id = execute_write(query, params)
         return jsonify({"success": True, "data": {"id": stakeholder_id}, "message": "Stakeholder created successfully"}), 201
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+        error_msg = str(e)
+        if "1062" in error_msg and "Duplicate entry" in error_msg:
+            return jsonify({"success": False, "message": "Email already exists"}), 400
+        return jsonify({"success": False, "message": error_msg}), 500
 
 @stakeholder_bp.route('/', methods=['GET'])
 def get_all_stakeholders():
