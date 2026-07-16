@@ -32,14 +32,14 @@ def create_app():
     from db_seeder import seed_users
     seed_users()
 
-    # Configure OpenTelemetry
-    resource = Resource.create({SERVICE_NAME: "kt-manager-backend"})
-    provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+    # Configure OpenTelemetry (Disabled to avoid connection refused errors)
+    # resource = Resource.create({SERVICE_NAME: "kt-manager-backend"})
+    # provider = TracerProvider(resource=resource)
+    # exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
+    # provider.add_span_processor(BatchSpanProcessor(exporter))
+    # trace.set_tracer_provider(provider)
     
-    FlaskInstrumentor().instrument_app(app)
+    # FlaskInstrumentor().instrument_app(app)
     
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
