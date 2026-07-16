@@ -18,11 +18,12 @@ def generate_plan():
     scope = data['scope_description']
     plan_type = data['plan_type']
     created_by = data.get('created_by') # Optional
+    reverse_kt_focus = data.get('reverse_kt_focus') # Optional
     
     
     try:
         from services.plan_service import generate_plan_service
-        result_data = generate_plan_service(app_name, scope, plan_type, created_by)
+        result_data = generate_plan_service(app_name, scope, plan_type, created_by, reverse_kt_focus)
         
         return jsonify({
             "success": True, 
@@ -64,10 +65,11 @@ def run_full_workflow():
     app_name = data['application_name']
     scope = data['scope_description']
     plan_type = data['plan_type']
+    reverse_kt_focus = data.get('reverse_kt_focus')
     
     try:
         from orchestrator import run_workflow
-        final_state = run_workflow(app_name, scope, plan_type)
+        final_state = run_workflow(app_name, scope, plan_type, reverse_kt_focus)
         return jsonify({"success": True, "message": "Workflow completed", "data": final_state}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

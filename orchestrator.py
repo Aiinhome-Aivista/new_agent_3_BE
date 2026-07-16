@@ -12,14 +12,17 @@ class AgentState(TypedDict):
     app_name: str
     scope_desc: str
     plan_type: str
+    reverse_kt_focus: str
 
 def plan_node(state: AgentState):
     if not state.get("plan_id"):
-        plan_id = generate_plan_service(
+        plan_res = generate_plan_service(
             state.get("app_name", "TestApp"),
             state.get("scope_desc", "Automated orchestration"),
-            state.get("plan_type", "KT")
+            state.get("plan_type", "KT"),
+            reverse_kt_focus=state.get("reverse_kt_focus")
         )
+        plan_id = plan_res["id"]
         state["plan_id"] = plan_id
         state["logs"].append(f"Plan generated with ID: {plan_id}")
     else:
@@ -64,14 +67,15 @@ def build_orchestrator():
 
 orchestrator_app = build_orchestrator()
 
-def run_workflow(app_name: str, scope_desc: str, plan_type: str):
+def run_workflow(app_name: str, scope_desc: str, plan_type: str, reverse_kt_focus: str = None):
     initial_state = {
         "plan_id": 0,
         "status": "started",
         "logs": [],
         "app_name": app_name,
         "scope_desc": scope_desc,
-        "plan_type": plan_type
+        "plan_type": plan_type,
+        "reverse_kt_focus": reverse_kt_focus
     }
     
     final_state = orchestrator_app.invoke(initial_state)

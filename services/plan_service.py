@@ -1,10 +1,12 @@
 from db import execute_write
 from llm_service import call_llm
 
-def generate_plan_service(application_name, scope_description, plan_type, created_by=None):
+def generate_plan_service(application_name, scope_description, plan_type, created_by=None, reverse_kt_focus=None):
+    focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
+    
     prompt = f"""
     You are an expert IT Project Manager. Create a detailed {plan_type} plan for the application '{application_name}'.
-    Scope: {scope_description}
+    Scope: {scope_description}{focus_text}
     
     Format the output as a clean, structured Markdown document including:
     1. Objectives
