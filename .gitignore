@@ -9,3 +9,4 @@ __pycache__/
 *.db
 Dockerfile
 docker-compose.yml
+reports_output/
