@@ -10,3 +10,5 @@ __pycache__/
 Dockerfile
 docker-compose.yml
 reports_output/
+token.json
+credentials.json
