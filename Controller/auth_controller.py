@@ -52,8 +52,8 @@ def login():
                 "message": "Account is inactive. Please contact your administrator."
             }), 403
             
-        # 5. Generate JWT Access Token (expires in 1 hour / 3600 seconds)
-        expires_in_seconds = 3600
+        # 5. Generate JWT Access Token (expires in 24 hours / 86400 seconds)
+        expires_in_seconds = 86400
         expiry_time = datetime.datetime.utcnow() + datetime.timedelta(seconds=expires_in_seconds)
         payload = {
             "sub": str(user['id']),
