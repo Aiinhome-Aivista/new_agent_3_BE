@@ -20,22 +20,25 @@ def detect_risks_service(plan_id):
     att_data = execute_query(att_query, (plan_id,))
     
     from rag_service import query_knowledge
-    rag_chunks = query_knowledge("risks issues problems", plan_id)
+    # Query with broader terms and more results to capture document context
+    rag_chunks = query_knowledge("risks issues problems challenges gaps delays", plan_id, n_results=10)
     from guardrails import retrieval_rail
-    retrieval_passed, _ = retrieval_rail(rag_chunks, endpoint="/api/risks/detect")
+    # Relax threshold for L2 distance to ensure documents are not wrongly discarded
+    retrieval_passed, _ = retrieval_rail(rag_chunks, threshold=1.5, endpoint="/api/risks/detect")
     if not retrieval_passed:
         rag_chunks = []
     rag_context = "\n".join([chunk["text"] for chunk in rag_chunks]) if rag_chunks else "None"
     
     prompt = f"""
-    Analyze the following Knowledge Transfer (KT) data and identify potential risks.
+    Analyze the following Knowledge Transfer (KT) tracking data AND the uploaded Knowledge Base documents to identify potential risks.
     
     Plan Info: {plan_data[0] if plan_data else 'N/A'}
     Topic Completions: {comp_data}
     Attendance Records: {att_data}
-    Related Knowledge Base Context: {rag_context}
+    Uploaded Knowledge Base Context: {rag_context}
     
-    Identify up to 3 major risks. For each, assign a severity ('low', 'medium', 'high', 'critical').
+    Using BOTH the tracking data (Completions, Attendance) and the Uploaded Knowledge Base Context, identify up to 3 major risks. Explicitly consider any issues, complexities, or gaps mentioned in the Uploaded Knowledge Base Context.
+    For each risk, assign a severity ('low', 'medium', 'high', 'critical').
     Return ONLY a JSON array of objects with keys "description" (string) and "severity" (string).
     """
     
