@@ -272,9 +272,24 @@ def add_stakeholder():
 
 @stakeholder_bp.route('/', methods=['GET'])
 def get_all_stakeholders():
+    role = request.args.get('role')
     try:
-        query = "SELECT * FROM stakeholders"
-        stakeholders = execute_query(query)
+        if role:
+            db_role = role
+            if role == 'Incoming Team Member (Knowledge Receiver)':
+                db_role = 'incoming_member'
+            elif role == 'Outgoing SME (Knowledge Giver)':
+                db_role = 'outgoing_sme'
+            elif role == 'Delivery / Engagement Manager':
+                db_role = 'engagement_manager'
+            elif role == 'PwC Leadership':
+                db_role = 'leadership'
+                
+            query = "SELECT * FROM stakeholders WHERE role = %s OR role = %s ORDER BY name ASC"
+            stakeholders = execute_query(query, (db_role, role))
+        else:
+            query = "SELECT * FROM stakeholders"
+            stakeholders = execute_query(query)
         return jsonify({"success": True, "data": stakeholders}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

@@ -41,6 +41,23 @@ def create_meeting():
         return jsonify({"success": False, "message": reason}), 400
         
     try:
+        # Validate participants
+        stakeholder_ids = data.get('stakeholder_ids') or data.get('attendees') or []
+        if not stakeholder_ids:
+            return jsonify({"success": False, "message": "At least one participant must be selected"}), 400
+            
+        format_strings = ','.join(['%s'] * len(stakeholder_ids))
+        query_roles = f"""
+            SELECT id FROM stakeholders 
+            WHERE id IN ({format_strings}) 
+            AND (role = 'incoming_member' OR role = 'Incoming Team Member (Knowledge Receiver)')
+        """
+        db_res = execute_query(query_roles, tuple(stakeholder_ids))
+        valid_stakeholder_ids = [row['id'] for row in db_res]
+        
+        if len(valid_stakeholder_ids) != len(stakeholder_ids):
+            return jsonify({"success": False, "message": "Invalid participants detected. Only Incoming Team Members (Knowledge Receivers) can be added as meeting participants."}), 400
+
         query = """
             INSERT INTO meetings (plan_id, title, scheduled_at, organizer_id, description, meeting_link)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -56,8 +73,7 @@ def create_meeting():
         meeting_id = execute_write(query, params)
         
         # Save optional attendee stakeholder IDs to attendance table
-        stakeholder_ids = data.get('stakeholder_ids') or data.get('attendees') or []
-        for sh_id in stakeholder_ids:
+        for sh_id in valid_stakeholder_ids:
             try:
                 execute_write(
                     "INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)",
