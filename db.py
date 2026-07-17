@@ -19,9 +19,20 @@ except mysql.connector.Error as err:
     db_pool = None
 
 def get_connection():
-    if not db_pool:
-        raise Exception("Database connection pool not initialized")
-    return db_pool.get_connection()
+    if db_pool:
+        try:
+            return db_pool.get_connection()
+        except mysql.connector.Error as err:
+            print(f"Warning: Failed to get connection from pool ({err}). Falling back to direct connection.")
+            
+    # Direct connection fallback
+    return mysql.connector.connect(
+        host=Config.DB_HOST,
+        port=Config.DB_PORT,
+        user=Config.DB_USER,
+        password=Config.DB_PASSWORD,
+        database=Config.DB_NAME
+    )
 
 def execute_query(query, params=None):
     conn = get_connection()
