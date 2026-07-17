@@ -38,8 +38,12 @@ def input_rail(payload: dict, required_fields: list, endpoint: str) -> tuple[boo
     log_guardrail("input", True, "Passed", endpoint)
     return True, ""
 
-def dialog_rail(question: str, endpoint: str) -> tuple[bool, str]:
-    prompt = f"Is this question about KT plans, schedules, risks, or assessments? Answer only YES or NO.\nQuestion: {question}"
+def dialog_rail(question: str, endpoint: str, has_context: bool = False) -> tuple[bool, str]:
+    if has_context:
+        prompt = f"Is this question completely out-of-scope (e.g., about weather, sports, or general coding entirely unrelated to a specific KT project)? Answer NO if it is out-of-scope, YES if it could plausibly be related to a KT project, its domain, technical implementation, architecture, or processes.\nQuestion: {question}"
+    else:
+        prompt = f"Is this a valid question for a Knowledge Transfer (KT) assistant? Allowed topics include KT plans, schedules, risks, assessments, AND technical/training topics, processes, or domain knowledge covered in the KT. Answer only YES or NO.\nQuestion: {question}"
+        
     llm_resp = call_llm(prompt)
     
     if not llm_resp:

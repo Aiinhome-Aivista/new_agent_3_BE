@@ -39,7 +39,10 @@ def query_knowledge(query_text: str, plan_id: int = None, n_results: int = 5) ->
     }
     
     if plan_id is not None:
-        kwargs["where"] = {"plan_id": plan_id}
+        try:
+            kwargs["where"] = {"plan_id": int(plan_id)}
+        except (ValueError, TypeError):
+            kwargs["where"] = {"plan_id": plan_id}
         
     results = collection.query(**kwargs)
     
