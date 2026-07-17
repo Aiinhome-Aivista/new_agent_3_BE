@@ -112,7 +112,52 @@ def _send_meeting_notification_async(meeting_id):
           </tr>
             """
 
+        # Generate ICS Content
+        import uuid
+        from datetime import datetime, timedelta
+        
+        # Calculate start and end times in the correct format for ICS
+        start_ics = scheduled_dt.strftime("%Y%m%dT%H%M%S")
+        end_dt = scheduled_dt + timedelta(hours=1)
+        end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
+        now_ics = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        
+        # Build attendee strings for ICS
+        attendees_ics = ""
+        for p in participants:
+            if p.get('email'):
+                attendees_ics += f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={p.get('name')}:mailto:{p['email']}\n"
+        
+        ics_content = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//KT Manager//EN
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:{uuid.uuid4()}@ktmanager.local
+DTSTAMP:{now_ics}
+DTSTART;TZID=Asia/Kolkata:{start_ics}
+DTEND;TZID=Asia/Kolkata:{end_ics}
+SUMMARY:{meeting['title']}
+DESCRIPTION:{meeting.get('description', 'KT Meeting')}
+LOCATION:{meeting.get('meeting_link', '')}
+ORGANIZER;CN={organizer_name}:mailto:{organizer_email or 'no-reply@ktmanager.local'}
+{attendees_ics.strip()}
+END:VEVENT
+END:VCALENDAR"""
+
+        participant_names_str = ", ".join([p.get('name', 'Unknown') for p in participants])
+
         for email, name in recipients.items():
+            # If the recipient is the organizer, show participants
+            participants_row = ""
+            if email == organizer_email:
+                participants_row = f"""
+          <tr>
+            <td class="label">Participants:</td>
+            <td class="value">{participant_names_str}</td>
+          </tr>
+                """
+
             html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -204,6 +249,7 @@ def _send_meeting_notification_async(meeting_id):
             <td class="label">Organizer:</td>
             <td class="value">{organizer_name}</td>
           </tr>
+          {participants_row}
           <tr>
             <td class="label">Date:</td>
             <td class="value">{meeting_date}</td>
@@ -227,7 +273,7 @@ def _send_meeting_notification_async(meeting_id):
 </body>
 </html>"""
             
-            success = EmailService.send_html_email(email, subject, html_content)
+            success = EmailService.send_html_email(email, subject, html_content, ics_content=ics_content)
             if success:
                 logger.info(f"Email Sent: Meeting ID = {meeting_id}, Recipient Email = {email}")
             else:

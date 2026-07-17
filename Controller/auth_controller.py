@@ -56,7 +56,7 @@ def login():
         expires_in_seconds = 3600
         expiry_time = datetime.datetime.utcnow() + datetime.timedelta(seconds=expires_in_seconds)
         payload = {
-            "sub": user['id'],
+            "sub": str(user['id']),
             "email": user['email'],
             "role": user['role'],
             "exp": expiry_time,
