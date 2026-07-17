@@ -62,3 +62,17 @@ def get_plan_topics(plan_id):
         return jsonify({"success": True, "data": topics}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@tracking_bp.route('/attendance/<int:meeting_id>', methods=['GET'])
+def get_meeting_attendance(meeting_id):
+    try:
+        query = """
+            SELECT a.stakeholder_id, a.attended, a.notes, s.name as stakeholder_name, s.role as stakeholder_role
+            FROM attendance a
+            JOIN stakeholders s ON a.stakeholder_id = s.id
+            WHERE a.meeting_id = %s
+        """
+        records = execute_query(query, (meeting_id,))
+        return jsonify({"success": True, "data": records}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500

@@ -135,6 +135,11 @@ def get_meetings():
         base_query += " ORDER BY m.scheduled_at ASC"
         meetings = execute_query(base_query, tuple(params))
 
+            
+        from services.tracking_service import get_meeting_attendance_rate
+        for m in meetings:
+            m['attendance_rate_percent'] = get_meeting_attendance_rate(m['id'])
+            
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
