@@ -8,9 +8,9 @@ logger = logging.getLogger(__name__)
 
 class EmailService:
     @staticmethod
-    def send_html_email(recipient_email, subject, html_content):
+    def send_html_email(recipient_email, subject, html_content, ics_content=None):
         """
-        Sends an HTML email using SMTP configuration.
+        Sends an HTML email using SMTP configuration, optionally with an ICS calendar attachment.
         Returns:
             bool: True if email sent successfully, False otherwise.
         """
@@ -28,14 +28,26 @@ class EmailService:
                 return False
 
             # Create message
-            msg = MIMEMultipart('alternative')
+            msg = MIMEMultipart('mixed')
             msg['Subject'] = subject
             msg['From'] = Config.SENDER_EMAIL
             msg['To'] = recipient_email
 
-            # Record the MIME type text/html.
-            part = MIMEText(html_content, 'html')
-            msg.attach(part)
+            # Add the HTML content
+            alt_part = MIMEMultipart('alternative')
+            alt_part.attach(MIMEText(html_content, 'html'))
+            msg.attach(alt_part)
+            
+            # Attach ICS if provided
+            if ics_content:
+                from email.mime.base import MIMEBase
+                from email import encoders
+                ics_part = MIMEBase('text', 'calendar', method='REQUEST')
+                ics_part.set_payload(ics_content.encode('utf-8'))
+                encoders.encode_base64(ics_part)
+                ics_part.add_header('Content-Disposition', 'attachment; filename="invite.ics"')
+                ics_part.add_header('Content-Class', 'urn:content-classes:calendarmessage')
+                msg.attach(ics_part)
 
             # Establish SMTP Connection
             logger.info(f"Connecting to SMTP server {Config.SMTP_SERVER}:{Config.SMTP_PORT}...")

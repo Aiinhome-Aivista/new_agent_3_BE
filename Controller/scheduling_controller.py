@@ -11,12 +11,16 @@ def get_authenticated_user():
         raise Exception("Missing or invalid Authorization header")
     
     token = auth_header.split(' ')[1]
+    print(f"DEBUG: Token prefix: {token[:10]}... Length: {len(token)}")
+    print(f"DEBUG: SECRET_KEY used: {Config.SECRET_KEY}")
     try:
         payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
         return payload
     except jwt.ExpiredSignatureError:
+        print("DEBUG: Token has expired")
         raise Exception("Token has expired")
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        print(f"DEBUG: InvalidTokenError details: {e}")
         raise Exception("Invalid token")
 
 @scheduling_bp.route('/meetings', methods=['POST'])
@@ -31,6 +35,7 @@ def create_meeting():
         logged_in_user = users[0]
         organizer_id = logged_in_user['id']
     except Exception as auth_err:
+        print(f"DEBUG AUTH_ERR: {auth_err}")
         return jsonify({"success": False, "message": str(auth_err)}), 401
 
     data = request.json or {}

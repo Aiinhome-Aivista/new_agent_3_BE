@@ -2,12 +2,12 @@ import os
 from dotenv import load_dotenv
 
 basedir = os.path.abspath(os.path.dirname(__file__))
-load_dotenv(os.path.join(basedir, '.env'))
+load_dotenv(os.path.join(basedir, '.env'), override=True)
 
 class Config:
     FLASK_ENV = os.getenv("FLASK_ENV", "development")
     FLASK_DEBUG = os.getenv("FLASK_DEBUG", "True").lower() == "true"
-    SECRET_KEY = os.getenv("SECRET_KEY", "change_this_secret_key")
+    SECRET_KEY = os.getenv("SECRET_KEY", "change_this_secret_key_32_bytes_long")
     
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "3306")

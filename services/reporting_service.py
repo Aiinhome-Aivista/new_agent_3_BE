@@ -10,12 +10,42 @@ except ImportError:
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'reports_output')
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
+import re
+
 def generate_report_doc(title, content, filename):
     if not Document:
         raise Exception("python-docx is not installed")
     doc = Document()
     doc.add_heading(title, 0)
-    doc.add_paragraph(content)
+    
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+            
+        if line.startswith('### '):
+            doc.add_heading(line[4:], level=3)
+        elif line.startswith('## '):
+            doc.add_heading(line[3:], level=2)
+        elif line.startswith('# '):
+            doc.add_heading(line[2:], level=1)
+        elif line.startswith('- ') or line.startswith('* '):
+            p = doc.add_paragraph(style='List Bullet')
+            parts = re.split(r'(\*\*.*?\*\*)', line[2:])
+            for part in parts:
+                if part.startswith('**') and part.endswith('**'):
+                    p.add_run(part[2:-2]).bold = True
+                else:
+                    p.add_run(part)
+        else:
+            p = doc.add_paragraph()
+            parts = re.split(r'(\*\*.*?\*\*)', line)
+            for part in parts:
+                if part.startswith('**') and part.endswith('**'):
+                    p.add_run(part[2:-2]).bold = True
+                else:
+                    p.add_run(part)
+                    
     filepath = os.path.join(REPORTS_DIR, filename)
     doc.save(filepath)
     return filepath
