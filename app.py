@@ -29,9 +29,9 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     
-    # Run Database Seeder
-    from db_seeder import seed_users
-    seed_users()
+    # Run Database Seeder (Commented out as initial test users are already seeded)
+    # from db_seeder import seed_users
+    # seed_users()
 
     # Configure OpenTelemetry (Disabled to avoid connection refused errors)
     # resource = Resource.create({SERVICE_NAME: "kt-manager-backend"})
