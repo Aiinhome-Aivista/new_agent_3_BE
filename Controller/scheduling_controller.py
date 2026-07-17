@@ -103,12 +103,41 @@ def create_meeting():
 def get_meetings():
     plan_id = request.args.get('plan_id')
     try:
-        if plan_id:
-            query = "SELECT * FROM meetings WHERE plan_id = %s ORDER BY scheduled_at ASC"
-            meetings = execute_query(query, (plan_id,))
+        try:
+            user_info = get_authenticated_user()
+            user_id = user_info['sub']
+            user = execute_query("SELECT email, role FROM users WHERE id = %s", (user_id,))[0]
+            user_email = user['email']
+            user_role = user['role']
+        except Exception as auth_err:
+            return jsonify({"success": False, "message": str(auth_err)}), 401
+
+        sh = execute_query("SELECT id FROM stakeholders WHERE email = %s", (user_email,))
+        stakeholder_id = sh[0]['id'] if sh else None
+
+        if user_role in ['Delivery / Engagement Manager', 'PwC Leadership']:
+            base_query = "SELECT DISTINCT m.* FROM meetings m"
+            params = []
+            if plan_id:
+                base_query += " WHERE m.plan_id = %s"
+                params.append(plan_id)
         else:
-            query = "SELECT * FROM meetings ORDER BY scheduled_at ASC"
-            meetings = execute_query(query)
+            base_query = """
+                SELECT DISTINCT m.* FROM meetings m 
+                LEFT JOIN attendance a ON m.id = a.meeting_id 
+                WHERE (m.organizer_id = %s OR a.stakeholder_id = %s)
+            """
+            params = [user_id, stakeholder_id]
+            if plan_id:
+                base_query += " AND m.plan_id = %s"
+                params.append(plan_id)
+
+        base_query += " ORDER BY m.scheduled_at ASC"
+        meetings = execute_query(base_query, tuple(params))
+        from services.tracking_service import get_meeting_attendance_rate
+        for m in meetings:
+            m['attendance_rate_percent'] = get_meeting_attendance_rate(m['id'])
+            
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
