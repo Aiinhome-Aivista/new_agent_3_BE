@@ -1,11 +1,39 @@
 from flask import Blueprint, request, jsonify
 from db import execute_query, execute_write
+import jwt
+from config import Config
 
 scheduling_bp = Blueprint('scheduling_bp', __name__)
 
+def get_authenticated_user():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        raise Exception("Missing or invalid Authorization header")
+    
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise Exception("Token has expired")
+    except jwt.InvalidTokenError:
+        raise Exception("Invalid token")
+
 @scheduling_bp.route('/meetings', methods=['POST'])
 def create_meeting():
-    data = request.json
+    try:
+        user_info = get_authenticated_user()
+        user_id = user_info['sub']
+        user_query = "SELECT id, full_name, email FROM users WHERE id = %s AND is_active = 1 LIMIT 1"
+        users = execute_query(user_query, (user_id,))
+        if not users:
+            return jsonify({"success": False, "message": "Authenticated user not found or inactive"}), 401
+        logged_in_user = users[0]
+        organizer_id = logged_in_user['id']
+    except Exception as auth_err:
+        return jsonify({"success": False, "message": str(auth_err)}), 401
+
+    data = request.json or {}
     required_fields = ['plan_id', 'title', 'scheduled_at']
     from guardrails import input_rail
     passed, reason = input_rail(data, required_fields, "/api/schedule/")
@@ -21,7 +49,7 @@ def create_meeting():
             data['plan_id'], 
             data['title'], 
             data['scheduled_at'], 
-            data.get('organizer_id'),
+            organizer_id,
             data.get('description'),
             data.get('meeting_link') or data.get('link')
         )

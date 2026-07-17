@@ -37,7 +37,7 @@ def _send_meeting_notification_async(meeting_id):
         organizer_name = "Not specified"
         organizer_email = None
         if meeting.get('organizer_id'):
-            org_records = execute_query("SELECT name, email FROM stakeholders WHERE id = %s", (meeting['organizer_id'],))
+            org_records = execute_query("SELECT full_name AS name, email FROM users WHERE id = %s", (meeting['organizer_id'],))
             if org_records:
                 organizer_name = org_records[0]['name']
                 organizer_email = org_records[0]['email']
