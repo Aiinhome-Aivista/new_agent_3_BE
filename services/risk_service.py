@@ -47,10 +47,18 @@ def detect_risks_service(plan_id):
         clean_json = llm_response.replace('```json', '').replace('```', '').strip()
         risks = json.loads(clean_json)
     except json.JSONDecodeError:
-        # Fallback if parsing fails
-        risks = [{"description": "AI generated risk analysis failed to parse. Raw response: " + llm_response[:100], "severity": "medium"}]
+        import logging
+        logging.warning(f"Risk detection LLM parse failure for plan {plan_id}: {llm_response[:200]}")
+        return []
         
     saved_risks = []
+    
+    existing_query = "SELECT id, description, severity, status, detected_by FROM risks WHERE plan_id = %s AND status = 'open'"
+    existing_risks = execute_query(existing_query, (plan_id,))
+    
+    def clean_words(s):
+        return set(''.join(c if c.isalnum() or c.isspace() else ' ' for c in s.lower()).split())
+        
     from guardrails import execution_rail
     for risk in risks:
         desc = risk.get('description', 'Unknown risk')
@@ -60,16 +68,33 @@ def detect_risks_service(plan_id):
         if not exec_passed:
             severity = 'medium'
             
+        desc_words = clean_words(desc)
+        duplicate_found = False
+        
+        for er in existing_risks:
+            er_words = clean_words(er['description'])
+            if not desc_words or not er_words:
+                continue
+            intersection = desc_words.intersection(er_words)
+            if len(intersection) / len(desc_words) >= 0.6 or len(intersection) / len(er_words) >= 0.6:
+                duplicate_found = True
+                saved_risks.append({
+                    "id": er['id'],
+                    "description": er['description'],
+                    "severity": er['severity'],
+                    "status": er['status'],
+                    "detected_by": er['detected_by']
+                })
+                break
+                
+        if duplicate_found:
+            continue
+            
         query = """
             INSERT INTO risks (plan_id, description, severity, detected_by)
             VALUES (%s, %s, %s, 'ai')
         """
         risk_id = execute_write(query, (plan_id, desc, severity))
-        
-        if severity == 'critical':
-            from connectors import JiraConnector
-            jira = JiraConnector()
-            jira.push_risk_to_jira(desc, severity, plan_id)
             
         saved_risks.append({
             "id": risk_id,
@@ -82,5 +107,20 @@ def detect_risks_service(plan_id):
     return saved_risks
 
 def escalate_risk_service(risk_id):
-    query = "UPDATE risks SET status = 'escalated' WHERE id = %s"
-    execute_write(query, (risk_id,))
+    risk_query = "SELECT description, severity, plan_id FROM risks WHERE id = %s"
+    risk_data = execute_query(risk_query, (risk_id,))
+    if not risk_data:
+        raise Exception("Risk not found")
+        
+    desc = risk_data[0]['description']
+    severity = risk_data[0]['severity']
+    plan_id = risk_data[0]['plan_id']
+    
+    from connectors import JiraConnector
+    jira = JiraConnector()
+    jira_ref = jira.push_risk_to_jira(desc, severity, plan_id)
+    
+    query = "UPDATE risks SET status = 'escalated', jira_ticket_ref = %s WHERE id = %s"
+    execute_write(query, (jira_ref, risk_id))
+    
+    return {"escalated": True, "jira_ticket_ref": jira_ref}

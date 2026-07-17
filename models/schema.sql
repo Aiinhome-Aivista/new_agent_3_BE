@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS risks (
     status ENUM('open','escalated','resolved') DEFAULT 'open',
     detected_by ENUM('ai','manual') NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    jira_ticket_ref VARCHAR(255) NULL,
     FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE
 );
 

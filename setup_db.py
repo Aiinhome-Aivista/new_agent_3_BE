@@ -30,6 +30,14 @@ def setup_database():
             if statement.strip():
                 cursor.execute(statement)
                 
+        # Add column to existing table (handle case where it already exists)
+        try:
+            cursor.execute("ALTER TABLE risks ADD COLUMN jira_ticket_ref VARCHAR(255) NULL;")
+        except mysql.connector.Error as err:
+            # Error 1060: Duplicate column name
+            if err.errno != 1060:
+                print(f"Migration note: {err}")
+                
         conn.commit()
         print("Database setup complete!")
         

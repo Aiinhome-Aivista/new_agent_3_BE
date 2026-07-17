@@ -16,6 +16,8 @@ def detect_risks():
     try:
         from services.risk_service import detect_risks_service
         saved_risks = detect_risks_service(plan_id)
+        if not saved_risks:
+            return jsonify({"success": True, "data": [], "message": "No risks detected or analysis could not be parsed — please try again"}), 200
         return jsonify({"success": True, "data": saved_risks, "message": "Risks detected and logged"}), 200
         
     except Exception as e:
@@ -39,7 +41,7 @@ def get_risks():
 def escalate_risk(id):
     try:
         from services.risk_service import escalate_risk_service
-        escalate_risk_service(id)
-        return jsonify({"success": True, "message": "Risk escalated"}), 200
+        result = escalate_risk_service(id)
+        return jsonify({"success": True, "data": result, "message": "Risk escalated"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
