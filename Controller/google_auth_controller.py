@@ -89,7 +89,7 @@ def callback():
         creds = flow.credentials
         
         # Save the credentials to token.json
-        token_path = r'd:\pwc\agent3\new_agent_3_BE\token.json'
+        token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'token.json')
         with open(token_path, 'w') as token_file:
             token_file.write(creds.to_json())
             
