@@ -123,3 +123,14 @@ CREATE TABLE IF NOT EXISTS guardrail_logs (
     endpoint VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS plan_topics (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    plan_id INT NOT NULL,
+    day_label VARCHAR(255),
+    topic_name VARCHAR(500) NOT NULL,
+    estimated_duration_hours VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE
+);
+

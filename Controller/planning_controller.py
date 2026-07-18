@@ -82,3 +82,26 @@ def approve_plan(id):
         return jsonify({"success": True, "message": "Plan approved successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:plan_id>/topics', methods=['GET'])
+def get_plan_topic_list(plan_id):
+    try:
+        query = "SELECT id, day_label, topic_name, estimated_duration_hours FROM plan_topics WHERE plan_id = %s ORDER BY id ASC"
+        topics = execute_query(query, (plan_id,))
+        return jsonify({"success": True, "data": topics}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:plan_id>/topics/resync', methods=['POST'])
+def resync_plan_topics(plan_id):
+    try:
+        plan_query = "SELECT generated_content FROM kt_plans WHERE id = %s"
+        plan = execute_query(plan_query, (plan_id,))
+        if not plan:
+            return jsonify({"success": False, "message": "Plan not found"}), 404
+
+        from services.plan_service import extract_and_save_topics
+        count = extract_and_save_topics(plan_id, plan[0]['generated_content'])
+        return jsonify({"success": True, "message": f"Re-synced {count} topics", "data": {"count": count}}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
