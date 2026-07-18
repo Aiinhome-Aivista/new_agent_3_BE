@@ -15,8 +15,10 @@ CREATE TABLE IF NOT EXISTS kt_plans (
     generated_content TEXT,
     status ENUM('draft','approved') DEFAULT 'draft',
     created_by INT,
+    approved_by INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES stakeholders(id) ON DELETE SET NULL
+    FOREIGN KEY (created_by) REFERENCES stakeholders(id) ON DELETE SET NULL,
+    FOREIGN KEY (approved_by) REFERENCES stakeholders(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS meetings (
@@ -48,8 +50,10 @@ CREATE TABLE IF NOT EXISTS completion_tracking (
     plan_id INT NOT NULL,
     topic VARCHAR(255) NOT NULL,
     completion_percent INT DEFAULT 0,
+    updated_by INT NULL,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE,
+    FOREIGN KEY (updated_by) REFERENCES stakeholders(id) ON DELETE SET NULL,
     UNIQUE(plan_id, topic)
 );
 
@@ -122,3 +126,14 @@ CREATE TABLE IF NOT EXISTS guardrail_logs (
     endpoint VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS plan_topics (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    plan_id INT NOT NULL,
+    day_label VARCHAR(255),
+    topic_name VARCHAR(500) NOT NULL,
+    estimated_duration_hours VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE
+);
+

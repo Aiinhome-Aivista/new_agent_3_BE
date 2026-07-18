@@ -1,12 +1,12 @@
 from db import execute_query, execute_write
 
-def update_completion_service(plan_id, topic, completion_percent):
+def update_completion_service(plan_id, topic, completion_percent, updated_by=None):
     query = """
-        INSERT INTO completion_tracking (plan_id, topic, completion_percent)
-        VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE completion_percent = VALUES(completion_percent)
+        INSERT INTO completion_tracking (plan_id, topic, completion_percent, updated_by)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE completion_percent = VALUES(completion_percent), updated_by = VALUES(updated_by)
     """
-    params = (plan_id, topic, completion_percent)
+    params = (plan_id, topic, completion_percent, updated_by)
     execute_write(query, params)
 
 def get_meeting_attendance_rate(meeting_id):
@@ -25,9 +25,18 @@ def get_meeting_attendance_rate(meeting_id):
 
 def get_plan_summary_service(plan_id):
     # Get average completion
-    comp_query = "SELECT AVG(completion_percent) as avg_completion FROM completion_tracking WHERE plan_id = %s"
-    comp_res = execute_query(comp_query, (plan_id,))
-    avg_completion = float(comp_res[0]['avg_completion']) if comp_res and comp_res[0]['avg_completion'] else 0
+    comp_query = """
+        SELECT 
+            (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
+            (SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics
+        FROM DUAL
+    """
+    comp_res = execute_query(comp_query, (plan_id, plan_id))
+    
+    if comp_res and comp_res[0]['total_topics'] and int(comp_res[0]['total_topics']) > 0:
+        avg_completion = (float(comp_res[0]['completed_topics']) / float(comp_res[0]['total_topics'])) * 100.0
+    else:
+        avg_completion = 0.0
     
     # Calculate overall attendance rate as the average of the individual meeting attendance rates
     meetings_query = "SELECT id FROM meetings WHERE plan_id = %s"

@@ -1,7 +1,35 @@
-from db import execute_write
+import json
+import logging
+from db import execute_write, execute_query
 from llm_service import call_llm
 
-def generate_plan_service(application_name, scope_description, plan_type, created_by=None, reverse_kt_focus=None):
+def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
+    """Find an existing stakeholder matching this user's email, or create one."""
+    existing = execute_query("SELECT id FROM stakeholders WHERE email = %s", (user_email,))
+    if existing:
+        return existing[0]['id']
+
+    # Map the users.role value to the stakeholders.role ENUM
+    role_map = {
+        'leadership': 'leadership',
+        'engagement_manager': 'engagement_manager',
+        'manager': 'engagement_manager',
+        'outgoing_sme': 'outgoing_sme',
+        'incoming_member': 'incoming_member',
+    }
+    mapped_role = role_map.get(user_role, 'engagement_manager')
+
+    new_id = execute_write(
+        "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)",
+        (user_full_name, user_email, mapped_role)
+    )
+    return new_id
+
+def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None):
+    created_by = None
+    if user_email and user_full_name and user_role:
+        created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
     
     prompt = f"""
@@ -28,8 +56,55 @@ def generate_plan_service(application_name, scope_description, plan_type, create
     params = (application_name, scope_description, plan_type, generated_content, created_by)
     plan_id = execute_write(query, params)
     
+    # Extract topics
+    extract_and_save_topics(plan_id, generated_content)
+    
     return {
         "id": plan_id,
         "generated_content": generated_content,
         "status": "draft"
     }
+
+def extract_and_save_topics(plan_id, generated_content):
+    extraction_prompt = f"""
+Below is a Knowledge Transfer plan. Extract every individual topic/session line item listed in its
+"Sessions / Topics Breakdown" tables (ignore the tables' header row and separator lines).
+
+Plan content:
+{generated_content}
+
+Return ONLY a JSON array of objects, each with keys:
+- "day_label" (string, e.g. "Day 1: Python Fundamentals and Core Concepts" — the section heading this topic falls under, or "General" if there are no day sections)
+- "topic_name" (string, the topic/row name, e.g. "Data Types and Variables")
+- "estimated_duration_hours" (string, e.g. "1" — use "N/A" if not specified)
+
+Do not include any explanation, only the JSON array.
+"""
+    try:
+        extraction_response = call_llm(extraction_prompt)
+        
+        # strip markdown code block fences if present
+        clean_json = extraction_response.strip()
+        if clean_json.startswith("```json"):
+            clean_json = clean_json[7:]
+        if clean_json.startswith("```"):
+            clean_json = clean_json[3:]
+        if clean_json.endswith("```"):
+            clean_json = clean_json[:-3]
+        clean_json = clean_json.strip()
+            
+        topics = json.loads(clean_json)
+        
+        # Clear existing topics if this is a resync
+        execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
+        
+        count = 0
+        for item in topics:
+            query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
+            execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
+            count += 1
+            
+        return count
+    except Exception as e:
+        logging.warning(f"Failed to extract topics for plan {plan_id}: {e}")
+        return 0

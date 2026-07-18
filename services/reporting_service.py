@@ -52,9 +52,18 @@ def generate_report_doc(title, content, filename):
 
 def generate_weekly_service(plan_id):
     # Gather context for LLM
-    comp_query = "SELECT AVG(completion_percent) as avg_comp FROM completion_tracking WHERE plan_id = %s"
-    comp_res = execute_query(comp_query, (plan_id,))
-    avg_comp = float(comp_res[0]['avg_comp']) if comp_res and comp_res[0]['avg_comp'] else 0
+    comp_query = """
+        SELECT 
+            (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
+            (SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics
+        FROM DUAL
+    """
+    comp_res = execute_query(comp_query, (plan_id, plan_id))
+    
+    if comp_res and comp_res[0]['total_topics'] and int(comp_res[0]['total_topics']) > 0:
+        avg_comp = (float(comp_res[0]['completed_topics']) / float(comp_res[0]['total_topics'])) * 100.0
+    else:
+        avg_comp = 0.0
     
     risk_query = "SELECT description, severity FROM risks WHERE plan_id = %s AND status != 'resolved'"
     risks = execute_query(risk_query, (plan_id,))
