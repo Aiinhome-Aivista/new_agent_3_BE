@@ -17,13 +17,33 @@ def generate_plan():
     app_name = data['application_name']
     scope = data['scope_description']
     plan_type = data['plan_type']
-    created_by = data.get('created_by') # Optional
     reverse_kt_focus = data.get('reverse_kt_focus') # Optional
     
+    # Extract user identity from JWT if present
+    user_email = None
+    user_full_name = None
+    user_role = None
+    
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            import jwt
+            from config import Config
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            user_email = payload.get('email')
+            user_role = payload.get('role')
+            user_id = payload.get('sub')
+            if user_id:
+                users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                if users:
+                    user_full_name = users[0]['full_name']
+        except Exception:
+            pass # fallback to None if invalid token
     
     try:
         from services.plan_service import generate_plan_service
-        result_data = generate_plan_service(app_name, scope, plan_type, created_by, reverse_kt_focus)
+        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus)
         
         return jsonify({
             "success": True, 
@@ -53,6 +73,17 @@ def get_plan(plan_id):
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+@planning_bp.route('/<int:plan_id>/assign-manager', methods=['PUT'])
+def assign_manager(plan_id):
+    data = request.json
+    if 'stakeholder_id' not in data:
+        return jsonify({"success": False, "message": "Missing stakeholder_id"}), 400
+    try:
+        execute_write("UPDATE kt_plans SET created_by = %s WHERE id = %s", (data['stakeholder_id'], plan_id))
+        return jsonify({"success": True, "message": "Manager assigned"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @planning_bp.route('/workflow', methods=['POST'])
 def run_full_workflow():
     data = request.json
@@ -77,8 +108,36 @@ def run_full_workflow():
 @planning_bp.route('/<int:id>/approve', methods=['PUT'])
 def approve_plan(id):
     try:
-        query = "UPDATE kt_plans SET status = 'approved' WHERE id = %s"
-        execute_write(query, (id,))
+        from services.plan_service import resolve_stakeholder_for_user
+        stakeholder_id = None
+
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                import jwt
+                from config import Config
+                payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+                user_email = payload.get('email')
+                user_role = payload.get('role')
+                user_id = payload.get('sub')
+                user_full_name = None
+                if user_id:
+                    users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                    if users:
+                        user_full_name = users[0]['full_name']
+                if user_email:
+                    stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            except Exception:
+                pass
+
+        if stakeholder_id:
+            query = "UPDATE kt_plans SET status = 'approved', approved_by = %s WHERE id = %s"
+            execute_write(query, (stakeholder_id, id))
+        else:
+            query = "UPDATE kt_plans SET status = 'approved' WHERE id = %s"
+            execute_write(query, (id,))
+
         return jsonify({"success": True, "message": "Plan approved successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

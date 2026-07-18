@@ -1,9 +1,35 @@
 import json
 import logging
-from db import execute_write
+from db import execute_write, execute_query
 from llm_service import call_llm
 
-def generate_plan_service(application_name, scope_description, plan_type, created_by=None, reverse_kt_focus=None):
+def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
+    """Find an existing stakeholder matching this user's email, or create one."""
+    existing = execute_query("SELECT id FROM stakeholders WHERE email = %s", (user_email,))
+    if existing:
+        return existing[0]['id']
+
+    # Map the users.role value to the stakeholders.role ENUM
+    role_map = {
+        'leadership': 'leadership',
+        'engagement_manager': 'engagement_manager',
+        'manager': 'engagement_manager',
+        'outgoing_sme': 'outgoing_sme',
+        'incoming_member': 'incoming_member',
+    }
+    mapped_role = role_map.get(user_role, 'engagement_manager')
+
+    new_id = execute_write(
+        "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)",
+        (user_full_name, user_email, mapped_role)
+    )
+    return new_id
+
+def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None):
+    created_by = None
+    if user_email and user_full_name and user_role:
+        created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
     
     prompt = f"""

@@ -35,8 +35,31 @@ def update_completion():
         return jsonify({"success": False, "message": reason}), 400
         
     try:
+        from services.plan_service import resolve_stakeholder_for_user
+        stakeholder_id = None
+
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                import jwt
+                from config import Config
+                payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+                user_email = payload.get('email')
+                user_role = payload.get('role')
+                user_id = payload.get('sub')
+                user_full_name = None
+                if user_id:
+                    users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                    if users:
+                        user_full_name = users[0]['full_name']
+                if user_email:
+                    stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            except Exception:
+                pass
+
         from services.tracking_service import update_completion_service
-        update_completion_service(data['plan_id'], data['topic'], data['completion_percent'])
+        update_completion_service(data['plan_id'], data['topic'], data['completion_percent'], updated_by=stakeholder_id)
         return jsonify({"success": True, "message": "Completion updated successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

@@ -38,6 +38,28 @@ def setup_database():
             if err.errno != 1060:
                 print(f"Migration note: {err}")
                 
+        try:
+            cursor.execute("ALTER TABLE kt_plans ADD COLUMN approved_by INT NULL;")
+        except mysql.connector.Error as err:
+            if err.errno != 1060:
+                print(f"Migration note: {err}")
+
+        try:
+            cursor.execute("ALTER TABLE kt_plans ADD CONSTRAINT fk_kt_plans_approved_by FOREIGN KEY (approved_by) REFERENCES stakeholders(id) ON DELETE SET NULL;")
+        except mysql.connector.Error as err:
+            print(f"Migration note (fk may already exist): {err}")
+
+        try:
+            cursor.execute("ALTER TABLE completion_tracking ADD COLUMN updated_by INT NULL;")
+        except mysql.connector.Error as err:
+            if err.errno != 1060:
+                print(f"Migration note: {err}")
+
+        try:
+            cursor.execute("ALTER TABLE completion_tracking ADD CONSTRAINT fk_completion_tracking_updated_by FOREIGN KEY (updated_by) REFERENCES stakeholders(id) ON DELETE SET NULL;")
+        except mysql.connector.Error as err:
+            print(f"Migration note (fk may already exist): {err}")
+
         conn.commit()
         print("Database setup complete!")
         

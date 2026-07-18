@@ -1,12 +1,12 @@
 from db import execute_query, execute_write
 
-def update_completion_service(plan_id, topic, completion_percent):
+def update_completion_service(plan_id, topic, completion_percent, updated_by=None):
     query = """
-        INSERT INTO completion_tracking (plan_id, topic, completion_percent)
-        VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE completion_percent = VALUES(completion_percent)
+        INSERT INTO completion_tracking (plan_id, topic, completion_percent, updated_by)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE completion_percent = VALUES(completion_percent), updated_by = VALUES(updated_by)
     """
-    params = (plan_id, topic, completion_percent)
+    params = (plan_id, topic, completion_percent, updated_by)
     execute_write(query, params)
 
 def get_meeting_attendance_rate(meeting_id):
