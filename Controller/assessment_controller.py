@@ -121,15 +121,27 @@ def submit_answer():
 def get_results(plan_id):
     try:
         stakeholder_id = request.args.get('stakeholder_id')
+        limit = request.args.get('limit', type=int)  # optional, e.g. limit=5
         if stakeholder_id:
-            query = """
-                SELECT ar.*, s.name as stakeholder_name, s.email as stakeholder_email
-                FROM assessment_results ar
-                JOIN stakeholders s ON ar.stakeholder_id = s.id
-                WHERE ar.plan_id = %s AND ar.stakeholder_id = %s
-                ORDER BY ar.created_at DESC
-            """
-            results = execute_query(query, (plan_id, stakeholder_id))
+            if limit and limit > 0:
+                query = """
+                    SELECT ar.*, s.name as stakeholder_name, s.email as stakeholder_email
+                    FROM assessment_results ar
+                    JOIN stakeholders s ON ar.stakeholder_id = s.id
+                    WHERE ar.plan_id = %s AND ar.stakeholder_id = %s
+                    ORDER BY ar.created_at DESC
+                    LIMIT %s
+                """
+                results = execute_query(query, (plan_id, stakeholder_id, limit))
+            else:
+                query = """
+                    SELECT ar.*, s.name as stakeholder_name, s.email as stakeholder_email
+                    FROM assessment_results ar
+                    JOIN stakeholders s ON ar.stakeholder_id = s.id
+                    WHERE ar.plan_id = %s AND ar.stakeholder_id = %s
+                    ORDER BY ar.created_at DESC
+                """
+                results = execute_query(query, (plan_id, stakeholder_id))
         else:
             query = """
                 SELECT ar.*, s.name as stakeholder_name, s.email as stakeholder_email
