@@ -67,12 +67,11 @@ CREATE TABLE IF NOT EXISTS risks (
 
 CREATE TABLE IF NOT EXISTS assessments (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    asid VARCHAR(255),
     plan_id INT NOT NULL,
     stakeholder_id INT NOT NULL,
     question TEXT NOT NULL,
     answer TEXT,
-    ai_score INT,
-    feedback TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE,
     FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(id) ON DELETE CASCADE

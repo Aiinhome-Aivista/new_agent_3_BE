@@ -32,3 +32,6 @@ class Config:
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+    
+    # AI Assessment Configuration
+    ASSESSMENT_QUESTION_COUNT = int(os.getenv("ASSESSMENT_QUESTION_COUNT", "5"))
