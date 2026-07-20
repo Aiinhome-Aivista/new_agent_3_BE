@@ -92,7 +92,43 @@ def generate_final_service(plan_id):
     plan_query = "SELECT application_name FROM kt_plans WHERE id = %s"
     app_name = execute_query(plan_query, (plan_id,))[0]['application_name']
     
-    prompt = f"Write a comprehensive Final KT Assessment Report for '{app_name}'. Include an executive summary, assessment of readiness, and sign-off section."
+    # Fetch completed/covered topics (100% complete)
+    topics_query = "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100"
+    completed_topics_res = execute_query(topics_query, (plan_id,))
+    completed_topics_list = [row['topic'] for row in completed_topics_res]
+    source_type = "completed topics (100% progress)"
+    
+    # Fallback 1: If no topics are 100% complete, fall back to topics with completion_percent > 0
+    if not completed_topics_list:
+        fallback_query = "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent > 0"
+        completed_topics_res = execute_query(fallback_query, (plan_id,))
+        completed_topics_list = [row['topic'] for row in completed_topics_res]
+        source_type = "partially covered topics (progress > 0%)"
+        
+    # Fallback 2: If still no topics have any tracked completion, fall back to all plan topics
+    if not completed_topics_list:
+        fallback_query = "SELECT topic_name FROM plan_topics WHERE plan_id = %s"
+        completed_topics_res = execute_query(fallback_query, (plan_id,))
+        completed_topics_list = [row['topic_name'] for row in completed_topics_res]
+        source_type = "all topics in the plan"
+        
+    topics_text = "\n".join([f"- {t}" for t in completed_topics_list]) if completed_topics_list else "No topics found"
+    
+    prompt = f"""
+    Write a comprehensive Final KT Assessment Report for '{app_name}'.
+    
+    The report MUST be generated based ONLY on the following covered topics of the selected plan ({source_type}):
+    {topics_text}
+    
+    CRITICAL:
+    - Only include information, assessment of readiness, and content directly relating to these covered topics.
+    - Do NOT include, mention, or describe any other topics, modules, or content. Absolutely no extra content is allowed outside of these covered topics.
+    
+    Structure the report with:
+    - Executive Summary (focusing ONLY on the covered topics)
+    - Detailed Assessment of Readiness (for each covered topic listed above)
+    - Sign-off Section
+    """
     
     content = call_llm(prompt)
     

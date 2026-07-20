@@ -66,3 +66,47 @@ def download_report(id):
         return send_file(filepath, as_attachment=True)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@reporting_bp.route('/view/<int:id>', methods=['GET'])
+def view_report(id):
+    try:
+        query = "SELECT file_path FROM reports WHERE id = %s"
+        report = execute_query(query, (id,))
+        if not report:
+            return jsonify({"success": False, "message": "Report not found"}), 404
+            
+        filename = report[0]['file_path']
+        filepath = os.path.join(REPORTS_DIR, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({"success": False, "message": "File not found on disk"}), 404
+            
+        if not Document:
+            return jsonify({"success": False, "message": "python-docx library not available"}), 500
+            
+        doc = Document(filepath)
+        structured_content = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+                
+            style_name = para.style.name if para.style else 'Normal'
+            
+            # Map style_name to element type
+            if style_name.startswith('Heading 1') or style_name.startswith('Title'):
+                elem_type = 'h1'
+            elif style_name.startswith('Heading 2'):
+                elem_type = 'h2'
+            elif style_name.startswith('Heading 3'):
+                elem_type = 'h3'
+            elif style_name.startswith('List'):
+                elem_type = 'list-item'
+            else:
+                elem_type = 'p'
+                
+            structured_content.append({"type": elem_type, "text": text})
+            
+        return jsonify({"success": True, "data": {"content": structured_content, "filename": filename}}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
