@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS knowledge_documents (
     id INT AUTO_INCREMENT PRIMARY KEY,
     plan_id INT NOT NULL,
+    kt_day VARCHAR(50),
     filename VARCHAR(255) NOT NULL,
     chunk_count INT NOT NULL,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

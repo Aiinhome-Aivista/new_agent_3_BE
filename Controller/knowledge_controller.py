@@ -13,6 +13,7 @@ def upload_document():
         
     file = request.files['file']
     plan_id = request.form.get('plan_id')
+    kt_day = request.form.get('kt_day')
     
     if file.filename == '':
         return jsonify({"success": False, "message": "No selected file"}), 400
@@ -45,32 +46,40 @@ def upload_document():
                 pdf_reader = pypdf.PdfReader(file)
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
-            elif ext == '.docx':
+            elif ext in ['.docx', '.doc', '.docs']:
                 import docx
                 doc = docx.Document(file)
                 for para in doc.paragraphs:
                     text += para.text + "\n"
+            elif ext in ['.ppt', '.pptx']:
+                from pptx import Presentation
+                prs = Presentation(file)
+                for slide in prs.slides:
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text"):
+                            text += shape.text + "\n"
             elif ext == '.txt':
                 text = file.read().decode('utf-8', errors='ignore')
             else:
                 return jsonify({"success": False, "message": "Unsupported file type"}), 400
             
         doc_id = str(uuid.uuid4())
-        metadata = {"plan_id": plan_id, "filename": filename}
+        metadata = {"plan_id": plan_id, "filename": filename, "kt_day": kt_day}
         
         chunk_count = add_document(doc_id, text, metadata)
         
         query = """
-            INSERT INTO knowledge_documents (plan_id, filename, chunk_count)
-            VALUES (%s, %s, %s)
+            INSERT INTO knowledge_documents (plan_id, kt_day, filename, chunk_count)
+            VALUES (%s, %s, %s, %s)
         """
-        doc_db_id = execute_write(query, (plan_id, filename, chunk_count))
+        doc_db_id = execute_write(query, (plan_id, kt_day, filename, chunk_count))
         
         return jsonify({
             "success": True, 
             "data": {
                 "id": doc_db_id,
                 "plan_id": plan_id,
+                "kt_day": kt_day,
                 "filename": filename,
                 "chunk_count": chunk_count
             },
