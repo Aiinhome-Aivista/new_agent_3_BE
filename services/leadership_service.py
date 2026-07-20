@@ -61,3 +61,65 @@ def get_manager_wise_summary():
         "combined_average_completion_percent": combined_avg,
         "total_managers": len(result)
     }
+
+def get_manager_wise_risk_summary():
+    plans_query = """
+        SELECT kp.id as plan_id, kp.application_name, kp.status, s.name as manager_name
+        FROM kt_plans kp
+        LEFT JOIN stakeholders s ON kp.approved_by = s.id
+    """
+    plans = execute_query(plans_query)
+
+    risks_query = "SELECT id, plan_id, description, severity, status, created_at FROM risks WHERE status = 'open' OR status = 'escalated'"
+    all_risks = execute_query(risks_query)
+
+    managers = {}
+    for p in plans:
+        manager_key = p['manager_name'] or 'Unassigned'
+        if manager_key not in managers:
+            managers[manager_key] = {"manager_name": manager_key, "plans": []}
+
+        plan_risks = [r for r in all_risks if r['plan_id'] == p['plan_id']]
+        
+        severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        for r in plan_risks:
+            sev = r['severity'].lower()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+                
+        managers[manager_key]["plans"].append({
+            "plan_id": p['plan_id'],
+            "application_name": p['application_name'],
+            "status": p['status'],
+            "total_risks": len(plan_risks),
+            "severity_counts": severity_counts,
+            "risks": plan_risks
+        })
+
+    result = []
+    total_risks_all = 0
+    
+    for m in managers.values():
+        plans_list = m["plans"]
+        m_total_risks = sum(pl['total_risks'] for pl in plans_list)
+        total_risks_all += m_total_risks
+        
+        m_severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        for pl in plans_list:
+            for sev, count in pl['severity_counts'].items():
+                m_severity_counts[sev] += count
+
+        result.append({
+            "manager_name": m["manager_name"],
+            "total_plans": len(plans_list),
+            "total_risks": m_total_risks,
+            "severity_counts": m_severity_counts,
+            "plans": plans_list
+        })
+
+    return {
+        "managers": result,
+        "total_risks": total_risks_all,
+        "total_managers": len(result)
+    }
+
