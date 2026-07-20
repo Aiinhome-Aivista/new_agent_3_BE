@@ -11,13 +11,21 @@ def detect_risks_service(plan_id):
     comp_data = execute_query(comp_query, (plan_id,))
     
     att_query = """
-        SELECT s.name, a.attended 
+        SELECT m.title as topic_title, s.name as stakeholder_name, s.role, a.attended 
         FROM attendance a
         JOIN meetings m ON a.meeting_id = m.id
         JOIN stakeholders s ON a.stakeholder_id = s.id
         WHERE m.plan_id = %s
     """
-    att_data = execute_query(att_query, (plan_id,))
+    detailed_att_data = execute_query(att_query, (plan_id,))
+    
+    assess_query = """
+        SELECT question, answer, s.name as stakeholder_name
+        FROM assessments a
+        JOIN stakeholders s ON a.stakeholder_id = s.id
+        WHERE a.plan_id = %s
+    """
+    assess_data = execute_query(assess_query, (plan_id,))
     
     from rag_service import query_knowledge
     # Query with broader terms and more results to capture document context
@@ -34,12 +42,19 @@ def detect_risks_service(plan_id):
     
     Plan Info: {plan_data[0] if plan_data else 'N/A'}
     Topic Completions: {comp_data}
-    Attendance Records: {att_data}
+    Detailed Meeting/Topic Attendance (Role, Name, Attended): {detailed_att_data}
+    Knowledge Receiver Assessment Results: {assess_data}
     Uploaded Knowledge Base Context: {rag_context}
     
-    Using BOTH the tracking data (Completions, Attendance) and the Uploaded Knowledge Base Context, identify up to 3 major risks. Explicitly consider any issues, complexities, or gaps mentioned in the Uploaded Knowledge Base Context.
+    CRITICAL INSTRUCTION: You MUST generate risks strictly on a PER-TOPIC basis. 
+    Evaluate the following for each topic/meeting:
+    1. Is the Knowledge Giver (Outgoing SME) taking KTs according to the schedule? (Look at their attendance in the meetings).
+    2. Which Knowledge Receivers (Incoming Members) have low attendance or missed KTs for the topic?
+    3. Which Knowledge Receivers have poor/failed assessment results for the topic?
+    
+    Identify up to 5 major risks based specifically on the giver's scheduling/attendance, receivers' low attendance, and receivers' poor assessment results per topic. Also consider any gaps mentioned in the Uploaded Knowledge Base Context.
     For each risk, assign a severity ('low', 'medium', 'high', 'critical').
-    Return ONLY a JSON array of objects with keys "description" (string) and "severity" (string).
+    Return ONLY a JSON array of objects with keys "description" (string) and "severity" (string). Do not return markdown.
     """
     
     llm_response = call_llm(prompt)
