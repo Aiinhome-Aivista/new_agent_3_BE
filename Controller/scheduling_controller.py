@@ -207,14 +207,15 @@ def get_meetings():
         stakeholder_id = sh[0]['id'] if sh else None
 
         if user_role in ['Delivery / Engagement Manager', 'PwC Leadership']:
-            base_query = "SELECT DISTINCT m.* FROM meetings m"
+            base_query = "SELECT DISTINCT m.*, p.application_name as plan_name FROM meetings m JOIN kt_plans p ON m.plan_id = p.id"
             params = []
             if plan_id:
                 base_query += " WHERE m.plan_id = %s"
                 params.append(plan_id)
         else:
             base_query = """
-                SELECT DISTINCT m.* FROM meetings m 
+                SELECT DISTINCT m.*, p.application_name as plan_name FROM meetings m 
+                JOIN kt_plans p ON m.plan_id = p.id
                 LEFT JOIN attendance a ON m.id = a.meeting_id 
                 WHERE (m.organizer_id = %s OR a.stakeholder_id = %s)
             """
@@ -226,8 +227,15 @@ def get_meetings():
         base_query += " ORDER BY m.scheduled_at ASC"
         meetings = execute_query(base_query, tuple(params))
         from services.tracking_service import get_meeting_attendance_rate
+        
+        plan_day_counters = {}
         for m in meetings:
             m['attendance_rate_percent'] = get_meeting_attendance_rate(m['id'])
+            pid = m['plan_id']
+            if pid not in plan_day_counters:
+                plan_day_counters[pid] = 1
+            m['day_label'] = f"Day {plan_day_counters[pid]}"
+            plan_day_counters[pid] += 1
             
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:
