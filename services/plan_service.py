@@ -178,3 +178,82 @@ def delete_topic_service(topic_id):
     query = "DELETE FROM plan_topics WHERE id = %s"
     execute_write(query, (topic_id,))
     return True
+
+def extract_plan_info_from_doc_service(file_storage):
+    import os
+    filename = file_storage.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    text = ""
+
+    if ext == '.pdf':
+        try:
+            import pypdf
+            pdf_reader = pypdf.PdfReader(file_storage)
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+        except Exception as e:
+            logging.error(f"Error reading PDF: {e}")
+            raise Exception(f"Failed to parse PDF file: {str(e)}")
+    elif ext in ['.docx', '.doc', '.docs']:
+        try:
+            import docx
+            doc = docx.Document(file_storage)
+            for para in doc.paragraphs:
+                if para.text:
+                    text += para.text + "\n"
+        except Exception as e:
+            logging.error(f"Error reading DOC/DOCX: {e}")
+            raise Exception(f"Failed to parse Word document: {str(e)}")
+    elif ext == '.txt':
+        text = file_storage.read().decode('utf-8', errors='ignore')
+    else:
+        raise Exception("Unsupported file type. Only PDF (.pdf) and Word documents (.doc, .docx) are allowed.")
+
+    text = text.strip()
+    if not text:
+        raise Exception("The uploaded document is empty or text could not be extracted.")
+
+    prompt = f"""
+    You are an expert IT Project Manager and System Architect.
+    Analyze the document text below and extract:
+    1. "application_name": The concise name or title of the project, application, or system described in the document.
+    2. "scope_description": A clear, comprehensive summary of the main topic names, modules, features, or session topics covered in the document.
+
+    Document Content:
+    {text[:20000]}
+
+    Return ONLY a valid JSON object with exact keys "application_name" and "scope_description".
+    Example format:
+    {{
+      "application_name": "E-Commerce Payment Gateway",
+      "scope_description": "System Architecture, Payment API Integration, Security & Encryption, DB Schema, Error Handling"
+    }}
+
+    Do not include markdown code block fences or any conversational filler.
+    """
+
+    llm_res = call_llm(prompt)
+    clean_json = llm_res.strip()
+    if clean_json.startswith("```json"):
+        clean_json = clean_json[7:]
+    if clean_json.startswith("```"):
+        clean_json = clean_json[3:]
+    if clean_json.endswith("```"):
+        clean_json = clean_json[:-3]
+    clean_json = clean_json.strip()
+
+    try:
+        extracted = json.loads(clean_json)
+        return {
+            "application_name": extracted.get("application_name", "").strip(),
+            "scope_description": extracted.get("scope_description", "").strip()
+        }
+    except Exception as e:
+        logging.error(f"Failed to parse LLM json response: {llm_res}")
+        return {
+            "application_name": filename.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ').title(),
+            "scope_description": text[:500]
+        }
+
