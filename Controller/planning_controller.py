@@ -164,3 +164,65 @@ def resync_plan_topics(plan_id):
         return jsonify({"success": True, "message": f"Re-synced {count} topics", "data": {"count": count}}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+@planning_bp.route('/<int:plan_id>/edit', methods=['PUT'])
+def update_plan(plan_id):
+    data = request.json
+    if 'generated_content' not in data:
+        return jsonify({"success": False, "message": "Missing generated_content"}), 400
+    try:
+        new_content = data['generated_content']
+        query = "UPDATE kt_plans SET generated_content = %s WHERE id = %s"
+        execute_write(query, (new_content, plan_id))
+        
+        # Auto re-sync plan_topics when plan content is edited
+        from services.plan_service import extract_and_save_topics
+        topic_count = extract_and_save_topics(plan_id, new_content)
+        
+        return jsonify({"success": True, "message": "Plan updated successfully", "topic_count": topic_count}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:plan_id>/topics', methods=['POST'])
+def add_plan_topic(plan_id):
+    data = request.json or {}
+    topic_name = data.get('topic_name')
+    if not topic_name:
+        return jsonify({"success": False, "message": "Missing topic_name"}), 400
+    try:
+        from services.plan_service import add_topic_service
+        topic_id = add_topic_service(
+            plan_id=plan_id,
+            day_label=data.get('day_label', 'General'),
+            topic_name=topic_name,
+            estimated_duration_hours=data.get('estimated_duration_hours', 'N/A')
+        )
+        return jsonify({"success": True, "message": "Topic added successfully", "data": {"id": topic_id}}), 201
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/topics/<int:topic_id>', methods=['PUT'])
+def update_plan_topic(topic_id):
+    data = request.json or {}
+    try:
+        from services.plan_service import update_topic_service
+        update_topic_service(
+            topic_id=topic_id,
+            day_label=data.get('day_label'),
+            topic_name=data.get('topic_name'),
+            estimated_duration_hours=data.get('estimated_duration_hours')
+        )
+        return jsonify({"success": True, "message": "Topic updated successfully"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/topics/<int:topic_id>', methods=['DELETE'])
+def delete_plan_topic(topic_id):
+    try:
+        from services.plan_service import delete_topic_service
+        delete_topic_service(topic_id)
+        return jsonify({"success": True, "message": "Topic deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
