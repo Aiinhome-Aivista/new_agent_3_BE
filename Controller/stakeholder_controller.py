@@ -331,8 +331,16 @@ def update_stakeholder(id):
 @stakeholder_bp.route('/<int:id>', methods=['DELETE'])
 def delete_stakeholder(id):
     try:
+        result = execute_query("SELECT email FROM stakeholders WHERE id = %s", (id,))
+        if not result:
+            return jsonify({"success": False, "message": "Stakeholder not found"}), 404
+        email = result[0]['email']
+
         query = "DELETE FROM stakeholders WHERE id = %s"
         execute_write(query, (id,))
-        return jsonify({"success": True, "message": "Stakeholder deleted successfully"}), 200
+        
+        execute_write("DELETE FROM users WHERE email = %s", (email,))
+        
+        return jsonify({"success": True, "message": "Stakeholder and associated user deleted successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
