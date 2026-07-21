@@ -84,11 +84,15 @@ def create_meeting():
             prompt += "\n"
             
         prompt += """
-Please generate a single Meeting Title and a brief Description for each day based on its topics. 
-Return the output ONLY as a valid JSON array of objects. Each object must have three string keys: 'day', 'title', and 'description'.
+Please generate a single Meeting Title, a brief Description, and a random start_time for each day based on its topics.
+The start_time must be chosen randomly within working hours: between 10:00 and 17:00 (24-hour format, HH:MM).
+Each day should ideally have a DIFFERENT start_time — vary them naturally (e.g., 10:30, 14:00, 11:45, 15:30, etc.).
+Meetings are 2 hours long, so the latest start time allowed is 17:00 so the session ends by 19:00.
+Return the output ONLY as a valid JSON array of objects. Each object must have exactly four string keys: 'day', 'title', 'description', and 'start_time'.
 For example:
 [
-  { "day": "Day 1: Python Fundamentals and Core Concepts", "title": "Day 1 KT: Python Fundamentals", "description": "Introduction, Setup, Syntax, and basic programming." }
+  { "day": "Day 1: Python Fundamentals and Core Concepts", "title": "Day 1 KT: Python Fundamentals", "description": "Introduction, Setup, Syntax, and basic programming.", "start_time": "10:30" },
+  { "day": "Day 2: Advanced Python", "title": "Day 2 KT: Advanced Python", "description": "OOP, decorators, generators.", "start_time": "14:00" }
 ]
 """
         from llm_service import call_llm
@@ -105,22 +109,43 @@ For example:
             return jsonify({"success": False, "message": "Failed to generate meeting schedule. Try again."}), 500
 
         from datetime import datetime, timedelta
+        import random
         start_date_str = data['scheduled_at']
         try:
             if 'T' in start_date_str:
-                current_dt = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+                base_dt = datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
             else:
-                current_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+                base_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
         except ValueError:
-            current_dt = datetime.strptime(start_date_str[:10], '%Y-%m-%d')
-            
-        current_dt = current_dt.replace(hour=10, minute=0, second=0, microsecond=0)
-        
+            base_dt = datetime.strptime(start_date_str[:10], '%Y-%m-%d')
+
+        # Use start_date as the rolling day pointer (time is set per-meeting below)
+        current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
         meeting_ids = []
         for idx, details in enumerate(day_details):
-            while current_dt.weekday() > 4: # Skip Sat/Sun
-                current_dt += timedelta(days=1)
-                
+            while current_day.weekday() > 4:  # Skip Sat/Sun
+                current_day += timedelta(days=1)
+
+            # Parse LLM-chosen start_time (HH:MM); fall back to a random time if invalid
+            raw_time = details.get('start_time', '')
+            try:
+                t_parts = raw_time.strip().split(':')
+                hour = int(t_parts[0])
+                minute = int(t_parts[1]) if len(t_parts) > 1 else 0
+                # Clamp: meetings are 2 hours, working window 10:00–17:00
+                if not (10 <= hour <= 17):
+                    raise ValueError("out of range")
+                if hour == 17 and minute > 0:
+                    minute = 0  # latest start is exactly 17:00
+            except Exception:
+                # Fallback: random time between 10:00 and 17:00 (on-the-hour slots)
+                hour = random.randint(10, 17)
+                minute = random.choice([0, 15, 30, 45])
+                if hour == 17:
+                    minute = 0
+
+            current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
             formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
             
             query = """
@@ -153,7 +178,8 @@ For example:
             except Exception as notify_err:
                 print(f"Error triggering notifications: {notify_err}")
 
-            current_dt += timedelta(days=1)
+            # Advance to the next calendar day (time will be set fresh in next iteration)
+            current_day += timedelta(days=1)
 
         return jsonify({
             "success": True, 

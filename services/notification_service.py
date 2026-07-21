@@ -121,7 +121,7 @@ def _send_meeting_notification_async(meeting_id):
         
         # Calculate start and end times in the correct format for ICS
         start_ics = scheduled_dt.strftime("%Y%m%dT%H%M%S")
-        end_dt = scheduled_dt + timedelta(hours=1)
+        end_dt = scheduled_dt + timedelta(hours=2)
         end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
         now_ics = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         
@@ -399,7 +399,7 @@ def _send_reschedule_notification_async(meeting_id, new_scheduled_dt, reason="")
         # 5. Build ICS for updated invite
         import uuid
         start_ics = scheduled_dt.strftime("%Y%m%dT%H%M%S")
-        end_dt = scheduled_dt + timedelta(hours=1)
+        end_dt = scheduled_dt + timedelta(hours=2)
         end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
         now_ics = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
 
