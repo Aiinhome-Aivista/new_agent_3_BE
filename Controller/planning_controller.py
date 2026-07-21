@@ -53,6 +53,26 @@ def generate_plan():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+@planning_bp.route('/extract-from-doc', methods=['POST'])
+def extract_plan_info_from_doc():
+    if 'file' not in request.files:
+        return jsonify({"success": False, "message": "No file uploaded"}), 400
+    
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({"success": False, "message": "No file selected"}), 400
+
+    try:
+        from services.plan_service import extract_plan_info_from_doc_service
+        extracted_info = extract_plan_info_from_doc_service(file)
+        return jsonify({
+            "success": True,
+            "data": extracted_info,
+            "message": "Document analyzed successfully"
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @planning_bp.route('/', methods=['GET'])
 def get_plans():
     try:
