@@ -70,8 +70,27 @@ def get_manager_wise_risk_summary():
     """
     plans = execute_query(plans_query)
 
-    risks_query = "SELECT id, plan_id, description, severity, status, created_at FROM risks WHERE status = 'open' OR status = 'escalated'"
+    risks_query = "SELECT id, plan_id, description, severity, status, created_at FROM risks"
     all_risks = execute_query(risks_query)
+
+    for r in all_risks:
+        assignees_query = """
+            SELECT s.name 
+            FROM risk_assignments ra
+            JOIN stakeholders s ON ra.stakeholder_id = s.id
+            WHERE ra.risk_id = %s
+        """
+        assignees = execute_query(assignees_query, (r['id'],))
+        r['assigned_stakeholders'] = [a['name'] for a in assignees] if assignees else []
+        
+        comments_query = """
+            SELECT rc.id, rc.comment_text, rc.created_at, s.name as stakeholder_name, s.role 
+            FROM risk_comments rc
+            JOIN stakeholders s ON rc.stakeholder_id = s.id
+            WHERE rc.risk_id = %s
+            ORDER BY rc.created_at ASC
+        """
+        r['comments'] = execute_query(comments_query, (r['id'],))
 
     managers = {}
     for p in plans:
@@ -81,30 +100,40 @@ def get_manager_wise_risk_summary():
 
         plan_risks = [r for r in all_risks if r['plan_id'] == p['plan_id']]
         
-        severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0}
         for r in plan_risks:
-            sev = r['severity'].lower()
-            if sev in severity_counts:
-                severity_counts[sev] += 1
+            if r['status'] == 'solved' or r['status'] == 'resolved':
+                severity_counts['solved'] += 1
+            elif r['status'] == 'in_progress':
+                severity_counts['in_progress'] += 1
+            else:
+                sev = r['severity'].lower()
+                if sev in severity_counts:
+                    severity_counts[sev] += 1
                 
+        open_plan_risks = [r for r in plan_risks if r['status'] not in ('solved', 'resolved')]
         managers[manager_key]["plans"].append({
             "plan_id": p['plan_id'],
             "application_name": p['application_name'],
             "status": p['status'],
             "total_risks": len(plan_risks),
+            "open_risks": len(open_plan_risks),
             "severity_counts": severity_counts,
             "risks": plan_risks
         })
 
     result = []
     total_risks_all = 0
+    total_open_risks_all = 0
     
     for m in managers.values():
         plans_list = m["plans"]
         m_total_risks = sum(pl['total_risks'] for pl in plans_list)
+        m_open_risks = sum(pl['open_risks'] for pl in plans_list)
         total_risks_all += m_total_risks
+        total_open_risks_all += m_open_risks
         
-        m_severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        m_severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0}
         for pl in plans_list:
             for sev, count in pl['severity_counts'].items():
                 m_severity_counts[sev] += count
@@ -113,6 +142,7 @@ def get_manager_wise_risk_summary():
             "manager_name": m["manager_name"],
             "total_plans": len(plans_list),
             "total_risks": m_total_risks,
+            "open_risks": m_open_risks,
             "severity_counts": m_severity_counts,
             "plans": plans_list
         })
@@ -120,6 +150,7 @@ def get_manager_wise_risk_summary():
     return {
         "managers": result,
         "total_risks": total_risks_all,
+        "total_open_risks": total_open_risks_all,
         "total_managers": len(result)
     }
 

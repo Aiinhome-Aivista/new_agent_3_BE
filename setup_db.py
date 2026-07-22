@@ -1,75 +1,29 @@
-import mysql.connector
-from config import Config
-import os
+import db
 
-def setup_database():
-    print(f"Connecting to MySQL server at {Config.DB_HOST}...")
-    try:
-        # Connect to MySQL server without specifying database to create it
-        conn = mysql.connector.connect(
-            host=Config.DB_HOST,
-            port=Config.DB_PORT,
-            user=Config.DB_USER,
-            password=Config.DB_PASSWORD
-        )
-        cursor = conn.cursor()
-        
-        print(f"Creating database {Config.DB_NAME} if it does not exist...")
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {Config.DB_NAME}")
-        cursor.execute(f"USE {Config.DB_NAME}")
-        
-        # Run schema.sql
-        schema_path = os.path.join(os.path.dirname(__file__), 'models', 'schema.sql')
-        print(f"Executing schema script from {schema_path}...")
-        
-        with open(schema_path, 'r') as file:
-            sql_script = file.read()
-            
-        # Execute each statement
-        for statement in sql_script.split(';'):
-            if statement.strip():
-                cursor.execute(statement)
-                
-        # Add column to existing table (handle case where it already exists)
-        try:
-            cursor.execute("ALTER TABLE risks ADD COLUMN jira_ticket_ref VARCHAR(255) NULL;")
-        except mysql.connector.Error as err:
-            # Error 1060: Duplicate column name
-            if err.errno != 1060:
-                print(f"Migration note: {err}")
-                
-        try:
-            cursor.execute("ALTER TABLE kt_plans ADD COLUMN approved_by INT NULL;")
-        except mysql.connector.Error as err:
-            if err.errno != 1060:
-                print(f"Migration note: {err}")
+db.execute_write('''ALTER TABLE risks MODIFY COLUMN status ENUM('open', 'escalated', 'resolved', 'in_progress', 'solved') DEFAULT 'open';''')
 
-        try:
-            cursor.execute("ALTER TABLE kt_plans ADD CONSTRAINT fk_kt_plans_approved_by FOREIGN KEY (approved_by) REFERENCES stakeholders(id) ON DELETE SET NULL;")
-        except mysql.connector.Error as err:
-            print(f"Migration note (fk may already exist): {err}")
+db.execute_write('''
+CREATE TABLE IF NOT EXISTS risk_assignments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    risk_id INT NOT NULL,
+    stakeholder_id INT NOT NULL,
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (risk_id) REFERENCES risks(id) ON DELETE CASCADE,
+    FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(id) ON DELETE CASCADE,
+    UNIQUE KEY idx_risk_stakeholder (risk_id, stakeholder_id)
+);
+''')
 
-        try:
-            cursor.execute("ALTER TABLE completion_tracking ADD COLUMN updated_by INT NULL;")
-        except mysql.connector.Error as err:
-            if err.errno != 1060:
-                print(f"Migration note: {err}")
+db.execute_write('''
+CREATE TABLE IF NOT EXISTS risk_comments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    risk_id INT NOT NULL,
+    stakeholder_id INT NOT NULL,
+    comment_text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (risk_id) REFERENCES risks(id) ON DELETE CASCADE,
+    FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(id) ON DELETE CASCADE
+);
+''')
 
-        try:
-            cursor.execute("ALTER TABLE completion_tracking ADD CONSTRAINT fk_completion_tracking_updated_by FOREIGN KEY (updated_by) REFERENCES stakeholders(id) ON DELETE SET NULL;")
-        except mysql.connector.Error as err:
-            print(f"Migration note (fk may already exist): {err}")
-
-        conn.commit()
-        print("Database setup complete!")
-        
-    except mysql.connector.Error as err:
-        print(f"Error: {err}")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn.is_connected():
-            conn.close()
-
-if __name__ == "__main__":
-    setup_database()
+print('DB Setup complete')
