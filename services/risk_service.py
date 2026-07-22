@@ -124,7 +124,7 @@ def detect_risks_service(plan_id):
         
     return saved_risks
 
-def escalate_risk_service(risk_id):
+def escalate_risk_service(risk_id, assigned_to=[], initial_note=None, manager_id=None):
     risk_query = "SELECT description, severity, plan_id FROM risks WHERE id = %s"
     risk_data = execute_query(risk_query, (risk_id,))
     if not risk_data:
@@ -136,9 +136,66 @@ def escalate_risk_service(risk_id):
     
     from connectors import JiraConnector
     jira = JiraConnector()
-    jira_ref = jira.push_risk_to_jira(desc, severity, plan_id)
+    jira_res = jira.push_risk_to_jira(desc, severity, plan_id)
+    jira_ref = jira_res.get("issue_id", "Unknown") if isinstance(jira_res, dict) else str(jira_res)
     
-    query = "UPDATE risks SET status = 'escalated', jira_ticket_ref = %s WHERE id = %s"
+    query = "UPDATE risks SET jira_ticket_ref = %s WHERE id = %s"
     execute_write(query, (jira_ref, risk_id))
     
-    return {"escalated": True, "jira_ticket_ref": jira_ref}
+    for stakeholder_id in assigned_to:
+        assign_query = "INSERT IGNORE INTO risk_assignments (risk_id, stakeholder_id) VALUES (%s, %s)"
+        execute_write(assign_query, (risk_id, stakeholder_id))
+        
+    if initial_note and manager_id:
+        comment_query = "INSERT INTO risk_comments (risk_id, stakeholder_id, comment_text) VALUES (%s, %s, %s)"
+        execute_write(comment_query, (risk_id, manager_id, initial_note))
+    
+    return {"escalated": True, "jira_ticket_ref": jira_ref, "assigned_to": assigned_to}
+
+def get_assigned_risks_service(stakeholder_id):
+    query = """
+        SELECT DISTINCT r.*, p.application_name as plan_name 
+        FROM risks r
+        JOIN risk_assignments ra ON r.id = ra.risk_id
+        JOIN kt_plans p ON r.plan_id = p.id
+        WHERE ra.stakeholder_id = %s
+        ORDER BY r.created_at DESC
+    """
+    risks = execute_query(query, (stakeholder_id,))
+    
+    for r in risks:
+        comments_query = """
+            SELECT rc.id, rc.comment_text, rc.created_at, s.name as stakeholder_name, s.role 
+            FROM risk_comments rc
+            JOIN stakeholders s ON rc.stakeholder_id = s.id
+            WHERE rc.risk_id = %s
+            ORDER BY rc.created_at ASC
+        """
+        r['comments'] = execute_query(comments_query, (r['id'],))
+        
+    return risks
+
+def add_risk_comment_service(risk_id, stakeholder_id, comment_text):
+    risk_query = "SELECT status FROM risks WHERE id = %s"
+    risk = execute_query(risk_query, (risk_id,))
+    if not risk:
+        raise Exception("Risk not found")
+    if risk[0]['status'] == 'solved':
+        raise Exception("Cannot add comment to a solved risk")
+        
+    query = "INSERT INTO risk_comments (risk_id, stakeholder_id, comment_text) VALUES (%s, %s, %s)"
+    comment_id = execute_write(query, (risk_id, stakeholder_id, comment_text))
+    return {"id": comment_id, "comment_text": comment_text}
+
+def update_risk_status_service(risk_id, status):
+    risk_query = "SELECT status FROM risks WHERE id = %s"
+    risk = execute_query(risk_query, (risk_id,))
+    if not risk:
+        raise Exception("Risk not found")
+    if risk[0]['status'] == 'solved':
+        raise Exception("Cannot change status of a solved risk")
+        
+    query = "UPDATE risks SET status = %s WHERE id = %s"
+    execute_write(query, (status, risk_id))
+    return True
+
