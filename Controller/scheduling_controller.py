@@ -214,12 +214,13 @@ def get_meetings():
                 params.append(plan_id)
         else:
             base_query = """
-                SELECT DISTINCT m.*, p.application_name as plan_name FROM meetings m 
+                SELECT DISTINCT m.*, p.application_name as plan_name, a.attended
+                FROM meetings m 
                 JOIN kt_plans p ON m.plan_id = p.id
-                LEFT JOIN attendance a ON m.id = a.meeting_id 
+                LEFT JOIN attendance a ON m.id = a.meeting_id AND a.stakeholder_id = %s
                 WHERE (m.organizer_id = %s OR a.stakeholder_id = %s)
             """
-            params = [user_id, stakeholder_id]
+            params = [stakeholder_id, user_id, stakeholder_id]
             if plan_id:
                 base_query += " AND m.plan_id = %s"
                 params.append(plan_id)
