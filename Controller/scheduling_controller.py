@@ -274,8 +274,8 @@ def notify_meeting(id):
 @scheduling_bp.route('/meetings/<int:id>/reschedule', methods=['PUT'])
 def reschedule_meeting(id):
     """
-    Reschedules the time of an existing meeting (same date, new time).
-    Accepts: { "new_time": "HH:MM", "reason": "optional reason" }
+    Reschedules the date and time of an existing meeting.
+    Accepts: { "new_time": "HH:MM", "new_date": "YYYY-MM-DD", "reason": "optional reason" }
     Updates scheduled_at in DB and triggers reschedule email notifications.
     """
     try:
@@ -297,14 +297,22 @@ def reschedule_meeting(id):
 
     data = request.json or {}
     new_time = data.get('new_time')  # Expected format: "HH:MM"
+    new_date = data.get('new_date')  # Expected format: "YYYY-MM-DD"
     reason = data.get('reason', '')
 
     if not new_time:
         return jsonify({"success": False, "message": "new_time is required (format HH:MM)"}), 400
 
+    if new_date:
+        from datetime import datetime
+        try:
+            datetime.strptime(new_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid new_date format. Use YYYY-MM-DD."}), 400
+
     # Validate time format
     try:
-        from datetime import datetime
+        from datetime import datetime, timedelta
         time_parts = new_time.split(':')
         if len(time_parts) < 2:
             raise ValueError("Invalid time")
@@ -317,7 +325,7 @@ def reschedule_meeting(id):
 
     try:
         # Fetch the current scheduled_at
-        meeting_row = execute_query("SELECT id, title, scheduled_at, status FROM meetings WHERE id = %s", (id,))
+        meeting_row = execute_query("SELECT id, plan_id, title, scheduled_at, status FROM meetings WHERE id = %s", (id,))
         if not meeting_row:
             return jsonify({"success": False, "message": "Meeting not found"}), 404
 
@@ -336,26 +344,115 @@ def reschedule_meeting(id):
             except ValueError:
                 existing_dt = datetime.fromisoformat(existing_dt)
 
-        # Keep the same date, change only the time
-        new_dt = existing_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        # Update date if provided, change time
+        if new_date:
+            date_parts = new_date.split('-')
+            new_dt = existing_dt.replace(year=int(date_parts[0]), month=int(date_parts[1]), day=int(date_parts[2]), hour=hour, minute=minute, second=0, microsecond=0)
+        else:
+            new_dt = existing_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            
+        if new_dt.weekday() > 4:
+            return jsonify({"success": False, "message": "Meetings cannot be rescheduled to a weekend (Saturday or Sunday)."}), 400
+            
         new_dt_str = new_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Update DB
-        execute_write(
-            "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
-            (new_dt_str, id)
-        )
+        reschedule_subsequent = data.get('reschedule_subsequent', False)
+        
+        if reschedule_subsequent:
+            biz_days_shift = 0
+            temp_date = existing_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date_only = new_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            if end_date_only > temp_date:
+                while temp_date < end_date_only:
+                    temp_date += timedelta(days=1)
+                    if temp_date.weekday() <= 4:
+                        biz_days_shift += 1
+            elif end_date_only < temp_date:
+                while temp_date > end_date_only:
+                    temp_date -= timedelta(days=1)
+                    if temp_date.weekday() <= 4:
+                        biz_days_shift -= 1
+                        
+            dt_same_day = existing_dt.replace(year=new_dt.year, month=new_dt.month, day=new_dt.day)
+            time_of_day_delta = new_dt - dt_same_day
 
-        # Fire reschedule notifications in background
-        try:
-            from services.notification_service import trigger_reschedule_notifications
-            trigger_reschedule_notifications(id, new_dt, reason)
-        except Exception as notify_err:
-            print(f"Error triggering reschedule notifications: {notify_err}")
+            plan_id = meeting['plan_id']
+            
+            subsequent_meetings = execute_query(
+                "SELECT id, scheduled_at FROM meetings WHERE plan_id = %s AND scheduled_at > %s AND status = 'scheduled' ORDER BY scheduled_at ASC",
+                (plan_id, existing_dt.strftime('%Y-%m-%d %H:%M:%S'))
+            )
+            
+            execute_write(
+                "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
+                (new_dt_str, id)
+            )
+            
+            notified_ids = [(id, new_dt)]
+            
+            for sub_m in subsequent_meetings:
+                sub_existing_dt = sub_m['scheduled_at']
+                if isinstance(sub_existing_dt, str):
+                    try:
+                        if 'T' in sub_existing_dt:
+                            sub_existing_dt = datetime.strptime(sub_existing_dt.replace('T', ' '), "%Y-%m-%d %H:%M:%S")
+                        else:
+                            sub_existing_dt = datetime.strptime(sub_existing_dt, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        sub_existing_dt = datetime.fromisoformat(sub_existing_dt)
+                
+                sub_new_dt = sub_existing_dt
+                shifts_left = biz_days_shift
+                if shifts_left > 0:
+                    while shifts_left > 0:
+                        sub_new_dt += timedelta(days=1)
+                        if sub_new_dt.weekday() <= 4:
+                            shifts_left -= 1
+                elif shifts_left < 0:
+                    while shifts_left < 0:
+                        sub_new_dt -= timedelta(days=1)
+                        if sub_new_dt.weekday() <= 4:
+                            shifts_left += 1
+                            
+                sub_new_dt += time_of_day_delta
+                
+                while sub_new_dt.weekday() > 4:
+                    sub_new_dt += timedelta(days=1)
+                
+                execute_write(
+                    "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
+                    (sub_new_dt.strftime('%Y-%m-%d %H:%M:%S'), sub_m['id'])
+                )
+                notified_ids.append((sub_m['id'], sub_new_dt))
+                
+            try:
+                from services.notification_service import trigger_reschedule_notifications
+                for m_id, m_new_dt in notified_ids:
+                    trigger_reschedule_notifications(m_id, m_new_dt, reason)
+            except Exception as notify_err:
+                print(f"Error triggering reschedule notifications: {notify_err}")
+            
+            msg = f"Meeting and {len(subsequent_meetings)} subsequent meetings rescheduled successfully. Participants will be notified via email."
+        else:
+            # Update DB
+            execute_write(
+                "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
+                (new_dt_str, id)
+            )
+
+            # Fire reschedule notifications in background
+            try:
+                from services.notification_service import trigger_reschedule_notifications
+                trigger_reschedule_notifications(id, new_dt, reason)
+            except Exception as notify_err:
+                print(f"Error triggering reschedule notifications: {notify_err}")
+
+            msg = f"Meeting rescheduled to {new_dt_str}. Participants will be notified via email."
 
         return jsonify({
             "success": True,
-            "message": f"Meeting rescheduled to {new_dt_str}. Participants will be notified via email."
+            "message": msg
         }), 200
 
     except Exception as e:

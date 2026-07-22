@@ -560,7 +560,7 @@ END:VCALENDAR"""
     <div class="content">
       <p>Hello {name},</p>
       <div class="alert-box">
-        <strong>Important:</strong> The following KT session has been rescheduled to a new time on the same date. Please update your calendar accordingly.
+        <strong>Important:</strong> The following KT session has been rescheduled. Please update your calendar accordingly.
       </div>
 
       <div class="meeting-details">
