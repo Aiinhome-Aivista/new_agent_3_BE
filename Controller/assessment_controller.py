@@ -27,23 +27,54 @@ def generate_questions():
         completed_topics_list = [row['topic'] for row in completed_topics_res]
         topics_str = "\n\n".join(completed_topics_list)
         
-        prompt = f"""
-        Completed Topics
+        # Check if any knowledge documents are uploaded for this plan
+        doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
+        docs_exist = execute_query(doc_query, (plan_id,))
         
-        {topics_str}
-        
-        Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
-        
-        IMPORTANT
-        
-        Generate questions ONLY from the completed KT topics above.
-        
-        Do NOT generate questions from unfinished topics.
-        
-        Do NOT assume any missing knowledge.
-        
-        Return ONLY a JSON array of strings, where each string is a question.
-        """
+        if docs_exist:
+            from rag_service import query_knowledge
+            # Query the RAG service for context based on the completed topics
+            context_texts = []
+            for topic in completed_topics_list:
+                results = query_knowledge(topic, plan_id=plan_id, n_results=3)
+                for r in results:
+                    context_texts.append(r['text'])
+            
+            context_str = "\n---\n".join(context_texts)
+            
+            prompt = f"""
+            Completed Topics:
+            {topics_str}
+            
+            Knowledge Base Context:
+            {context_str}
+            
+            Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
+            
+            IMPORTANT:
+            - You MUST generate questions STRICTLY based on the provided Knowledge Base Context.
+            - The questions must also relate to the Completed Topics.
+            - Do NOT generate questions using outside knowledge or generally. ONLY use the provided Context.
+            - Return ONLY a JSON array of strings, where each string is a question.
+            """
+        else:
+            prompt = f"""
+            Completed Topics
+            
+            {topics_str}
+            
+            Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
+            
+            IMPORTANT
+            
+            Generate questions ONLY from the completed KT topics above.
+            
+            Do NOT generate questions from unfinished topics.
+            
+            Do NOT assume any missing knowledge.
+            
+            Return ONLY a JSON array of strings, where each string is a question.
+            """
         
         llm_response = call_llm(prompt)
         
