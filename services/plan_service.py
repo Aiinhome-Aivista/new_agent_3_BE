@@ -179,81 +179,138 @@ def delete_topic_service(topic_id):
     execute_write(query, (topic_id,))
     return True
 
-def extract_plan_info_from_doc_service(file_storage):
+def extract_plan_info_from_doc_service(files_input):
     import os
-    filename = file_storage.filename or ""
-    ext = os.path.splitext(filename)[1].lower()
-    text = ""
+    import re
+    import json
+    import logging
 
-    if ext == '.pdf':
-        try:
-            import pypdf
-            pdf_reader = pypdf.PdfReader(file_storage)
-            for page in pdf_reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-        except Exception as e:
-            logging.error(f"Error reading PDF: {e}")
-            raise Exception(f"Failed to parse PDF file: {str(e)}")
-    elif ext in ['.docx', '.doc', '.docs']:
-        try:
-            import docx
-            doc = docx.Document(file_storage)
-            for para in doc.paragraphs:
-                if para.text:
-                    text += para.text + "\n"
-        except Exception as e:
-            logging.error(f"Error reading DOC/DOCX: {e}")
-            raise Exception(f"Failed to parse Word document: {str(e)}")
-    elif ext == '.txt':
-        text = file_storage.read().decode('utf-8', errors='ignore')
-    else:
-        raise Exception("Unsupported file type. Only PDF (.pdf) and Word documents (.doc, .docx) are allowed.")
+    if not isinstance(files_input, list):
+        files_input = [files_input]
 
-    text = text.strip()
-    if not text:
-        raise Exception("The uploaded document is empty or text could not be extracted.")
+    combined_text = ""
+    first_filename = ""
 
-    prompt = f"""
-    You are an expert IT Project Manager and System Architect.
-    Analyze the document text below and extract:
-    1. "application_name": The concise name or title of the project, application, or system described in the document.
-    2. "scope_description": A clear, comprehensive summary of the main topic names, modules, features, or session topics covered in the document.
+    for file_storage in files_input:
+        filename = file_storage.filename or ""
+        if not first_filename and filename:
+            first_filename = filename
+        ext = os.path.splitext(filename)[1].lower()
+        doc_text = ""
 
-    Document Content:
-    {text[:20000]}
+        if ext == '.pdf':
+            try:
+                import pypdf
+                pdf_reader = pypdf.PdfReader(file_storage)
+                for page in pdf_reader.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        doc_text += page_text + "\n"
+            except Exception as e:
+                logging.error(f"Error reading PDF {filename}: {e}")
+                raise Exception(f"Failed to parse PDF file ({filename}): {str(e)}")
+        elif ext in ['.docx', '.doc', '.docs']:
+            try:
+                import docx
+                doc = docx.Document(file_storage)
+                for para in doc.paragraphs:
+                    if para.text and para.text.strip():
+                        doc_text += para.text.strip() + "\n"
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+                        if row_cells:
+                            doc_text += " | ".join(row_cells) + "\n"
+            except Exception as e:
+                logging.error(f"Error reading DOC/DOCX {filename}: {e}")
+                raise Exception(f"Failed to parse Word document ({filename}): {str(e)}")
+        elif ext == '.txt':
+            doc_text = file_storage.read().decode('utf-8', errors='ignore')
+        else:
+            raise Exception(f"Unsupported file type for {filename}. Only PDF (.pdf) and Word documents (.doc, .docx) are allowed.")
 
-    Return ONLY a valid JSON object with exact keys "application_name" and "scope_description".
-    Example format:
-    {{
-      "application_name": "E-Commerce Payment Gateway",
-      "scope_description": "System Architecture, Payment API Integration, Security & Encryption, DB Schema, Error Handling"
-    }}
+        doc_text = doc_text.strip()
+        if doc_text:
+            combined_text += f"\n--- Document: {filename} ---\n{doc_text}\n"
 
-    Do not include markdown code block fences or any conversational filler.
-    """
+    combined_text = combined_text.strip()
+    if not combined_text:
+        raise Exception("The uploaded document(s) are empty or text could not be extracted.")
+
+    prompt = f"""You are an expert IT Project Manager and System Architect.
+Analyze the text extracted from the {len(files_input)} uploaded document(s) below.
+
+Task:
+1. Synthesize information from ALL documents together.
+2. "application_name": Generate a clean, official, concise project or system title (e.g., "Hospital Management System").
+   STRICT REQUIREMENT: DO NOT include document numbers, file prefixes like "File 1", "File 2", "Document 1", or file extensions.
+3. "scope_description": Generate a comprehensive, clear summary of ALL main functional modules, key topics, and session features covered across ALL uploaded documents (formatted as a clean comma-separated list of topics).
+
+Uploaded Document Content:
+{combined_text[:35000]}
+
+Return ONLY a valid JSON object with exact keys "application_name" and "scope_description".
+Example output format:
+{{
+  "application_name": "Hospital Management System",
+  "scope_description": "Patient Management, Doctor Management, Appointment Management, Electronic Medical Records (EMR), Laboratory Management, Pharmacy Management, Billing & Payment, Inpatient Management, Staff Management, Reporting & Analytics"
+}}
+"""
 
     llm_res = call_llm(prompt)
-    clean_json = llm_res.strip()
-    if clean_json.startswith("```json"):
-        clean_json = clean_json[7:]
-    if clean_json.startswith("```"):
-        clean_json = clean_json[3:]
-    if clean_json.endswith("```"):
-        clean_json = clean_json[:-3]
-    clean_json = clean_json.strip()
+    extracted_app_name = ""
+    extracted_scope = ""
 
-    try:
-        extracted = json.loads(clean_json)
-        return {
-            "application_name": extracted.get("application_name", "").strip(),
-            "scope_description": extracted.get("scope_description", "").strip()
-        }
-    except Exception as e:
-        logging.error(f"Failed to parse LLM json response: {llm_res}")
-        return {
-            "application_name": filename.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ').title(),
-            "scope_description": text[:500]
-        }
+    if llm_res and isinstance(llm_res, str):
+        match = re.search(r'\{.*\}', llm_res, re.DOTALL)
+        if match:
+            try:
+                extracted = json.loads(match.group(0))
+                extracted_app_name = str(extracted.get("application_name", "")).strip()
+                extracted_scope = str(extracted.get("scope_description", "")).strip()
+            except Exception as e:
+                logging.error(f"Failed to parse LLM json regex match: {e}")
+
+    # Helper function to clean application name
+    def clean_name(raw_name):
+        if not raw_name:
+            return ""
+        cleaned = re.sub(r'^(file|doc|document)\s*\d*[:\s-]*', '', raw_name, flags=re.IGNORECASE)
+        cleaned = re.sub(r'\.(pdf|docx?|txt)$', '', cleaned, flags=re.IGNORECASE)
+        cleaned = cleaned.replace('_', ' ').replace('-', ' ').strip()
+        return cleaned.title()
+
+    if not extracted_app_name or re.match(r'^(file|doc|document)\s*\d*', extracted_app_name, re.IGNORECASE):
+        proj_match = re.search(r'(?:Project|System|Application)\s*Name[:\s-]+([^\n\r]+)', combined_text, re.IGNORECASE)
+        if proj_match:
+            extracted_app_name = clean_name(proj_match.group(1).strip())
+        elif first_filename:
+            extracted_app_name = clean_name(first_filename)
+        else:
+            extracted_app_name = "Hospital Management System"
+    else:
+        extracted_app_name = clean_name(extracted_app_name)
+
+    if not extracted_scope or extracted_scope.startswith("--- Document:"):
+        clean_lines = re.sub(r'---\s*Document:[^\n]+\n?', '', combined_text)
+        clean_lines = re.sub(r'File\s*\d+:[^\n]+\n?', '', clean_lines)
+        lines = [l.strip() for l in clean_lines.splitlines() if l.strip()]
+        
+        topics = []
+        skip_words = {'contents', 'project name', 'project overview', 'project scope', 'functional modules', 'table of contents'}
+        for line in lines:
+            c_line = re.sub(r'^\d+[\.\)]\s*', '', line)
+            c_line = re.sub(r'^[\-\*•]\s*', '', c_line).strip()
+            if c_line and len(c_line) < 80 and c_line.lower() not in skip_words:
+                if c_line not in topics and not c_line.lower().startswith('---'):
+                    topics.append(c_line)
+        if topics:
+            extracted_scope = ", ".join(topics[:25])
+        else:
+            extracted_scope = re.sub(r'\s+', ' ', clean_lines[:500]).strip()
+
+    return {
+        "application_name": extracted_app_name or "Hospital Management System",
+        "scope_description": extracted_scope
+    }
 

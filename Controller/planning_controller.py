@@ -55,20 +55,23 @@ def generate_plan():
 
 @planning_bp.route('/extract-from-doc', methods=['POST'])
 def extract_plan_info_from_doc():
-    if 'file' not in request.files:
-        return jsonify({"success": False, "message": "No file uploaded"}), 400
+    uploaded_files = []
+    if 'files' in request.files:
+        uploaded_files = request.files.getlist('files')
+    elif 'file' in request.files:
+        uploaded_files = request.files.getlist('file')
     
-    file = request.files['file']
-    if not file or file.filename == '':
-        return jsonify({"success": False, "message": "No file selected"}), 400
+    uploaded_files = [f for f in uploaded_files if f and f.filename != '']
+    if not uploaded_files:
+        return jsonify({"success": False, "message": "No file uploaded"}), 400
 
     try:
         from services.plan_service import extract_plan_info_from_doc_service
-        extracted_info = extract_plan_info_from_doc_service(file)
+        extracted_info = extract_plan_info_from_doc_service(uploaded_files)
         return jsonify({
             "success": True,
             "data": extracted_info,
-            "message": "Document analyzed successfully"
+            "message": "Document(s) analyzed successfully"
         }), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
