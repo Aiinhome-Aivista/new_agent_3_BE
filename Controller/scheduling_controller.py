@@ -646,3 +646,156 @@ def reschedule_meeting(id):
         print(f"Error in reschedule_meeting: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+def init_feedback_table():
+    try:
+        execute_write('''
+            CREATE TABLE IF NOT EXISTS meeting_feedback (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                meeting_id INT NOT NULL,
+                plan_id INT NULL,
+                knowledge_giver_id INT NOT NULL,
+                knowledge_receiver_id INT NOT NULL,
+                rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+                feedback_text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
+                FOREIGN KEY (knowledge_giver_id) REFERENCES stakeholders(id) ON DELETE CASCADE,
+                FOREIGN KEY (knowledge_receiver_id) REFERENCES stakeholders(id) ON DELETE CASCADE,
+                UNIQUE KEY idx_meeting_giver_receiver (meeting_id, knowledge_giver_id, knowledge_receiver_id)
+            );
+        ''')
+    except Exception as err:
+        print(f"Error initializing meeting_feedback table: {err}")
+
+@scheduling_bp.route('/meetings/<int:id>/feedback', methods=['GET'])
+def get_meeting_feedback(id):
+    init_feedback_table()
+    try:
+        user_info = get_authenticated_user()
+        user_id = user_info['sub']
+        user = execute_query("SELECT email, role FROM users WHERE id = %s", (user_id,))
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+        user_email = user[0]['email']
+
+        sh = execute_query("SELECT id, name, role FROM stakeholders WHERE email = %s", (user_email,))
+        receiver_id = sh[0]['id'] if sh else None
+
+        # Fetch meeting info
+        meeting = execute_query("SELECT id, plan_id, title FROM meetings WHERE id = %s", (id,))
+        if not meeting:
+            return jsonify({"success": False, "message": "Meeting not found"}), 404
+        
+        meeting_obj = meeting[0]
+
+        # Find knowledge givers for this meeting
+        givers_query = """
+            SELECT DISTINCT s.id, s.name, s.email, s.role
+            FROM stakeholders s
+            JOIN attendance a ON a.stakeholder_id = s.id
+            WHERE a.meeting_id = %s AND (s.role IN ('outgoing_sme', 'Outgoing SME (Knowledge Giver)'))
+        """
+        givers = execute_query(givers_query, (id,))
+
+        organizer_query = """
+            SELECT DISTINCT s.id, s.name, s.email, s.role
+            FROM stakeholders s
+            JOIN users u ON u.email = s.email
+            JOIN meetings m ON m.organizer_id = u.id
+            WHERE m.id = %s AND (s.role IN ('outgoing_sme', 'Outgoing SME (Knowledge Giver)') OR u.role = 'Outgoing SME (Knowledge Giver)')
+        """
+        organizer_givers = execute_query(organizer_query, (id,))
+
+        giver_dict = {}
+        for g in (givers + organizer_givers):
+            giver_dict[g['id']] = g
+
+        if not giver_dict:
+            all_givers = execute_query("SELECT id, name, email, role FROM stakeholders WHERE role IN ('outgoing_sme', 'Outgoing SME (Knowledge Giver)')")
+            for g in all_givers:
+                giver_dict[g['id']] = g
+
+        giver_list = list(giver_dict.values())
+
+        existing_feedback_dict = {}
+        if receiver_id:
+            fb_rows = execute_query(
+                "SELECT knowledge_giver_id, rating, feedback_text FROM meeting_feedback WHERE meeting_id = %s AND knowledge_receiver_id = %s",
+                (id, receiver_id)
+            )
+            for row in fb_rows:
+                existing_feedback_dict[row['knowledge_giver_id']] = row
+
+        result_givers = []
+        for g in giver_list:
+            fb = existing_feedback_dict.get(g['id'], {})
+            result_givers.append({
+                "id": g['id'],
+                "name": g['name'],
+                "email": g['email'],
+                "role": g['role'],
+                "rating": fb.get('rating', 0),
+                "feedback_text": fb.get('feedback_text', '')
+            })
+
+        return jsonify({
+            "success": True,
+            "meeting": meeting_obj,
+            "givers": result_givers,
+            "receiver_id": receiver_id
+        }), 200
+    except Exception as e:
+        print(f"Error in get_meeting_feedback: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@scheduling_bp.route('/meetings/<int:id>/feedback', methods=['POST'])
+def submit_meeting_feedback(id):
+    init_feedback_table()
+    try:
+        user_info = get_authenticated_user()
+        user_id = user_info['sub']
+        user = execute_query("SELECT email, role FROM users WHERE id = %s", (user_id,))
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+        user_email = user[0]['email']
+        user_role = user[0]['role']
+
+        sh = execute_query("SELECT id FROM stakeholders WHERE email = %s", (user_email,))
+        if not sh:
+            return jsonify({"success": False, "message": "Stakeholder profile not found for user"}), 404
+        receiver_id = sh[0]['id']
+
+        meeting = execute_query("SELECT plan_id FROM meetings WHERE id = %s", (id,))
+        if not meeting:
+            return jsonify({"success": False, "message": "Meeting not found"}), 404
+        plan_id = meeting[0]['plan_id']
+
+        data = request.json or {}
+        feedbacks = data.get('feedbacks', [])
+        if not feedbacks:
+            return jsonify({"success": False, "message": "No feedback provided."}), 400
+
+        for item in feedbacks:
+            giver_id = item.get('knowledge_giver_id')
+            rating = item.get('rating')
+            feedback_text = item.get('feedback_text', '')
+
+            if not giver_id or not rating or rating < 1 or rating > 5:
+                continue
+
+            sql = """
+                INSERT INTO meeting_feedback (meeting_id, plan_id, knowledge_giver_id, knowledge_receiver_id, rating, feedback_text)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE rating = VALUES(rating), feedback_text = VALUES(feedback_text)
+            """
+            execute_write(sql, (id, plan_id, giver_id, receiver_id, rating, feedback_text))
+
+        return jsonify({"success": True, "message": "Feedback and ratings submitted successfully!"}), 200
+    except Exception as e:
+        print(f"Error in submit_meeting_feedback: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
