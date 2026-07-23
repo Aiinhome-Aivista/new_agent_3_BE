@@ -124,27 +124,101 @@ For example:
 
         meeting_ids = []
         for idx, details in enumerate(day_details):
-            while current_day.weekday() > 4:  # Skip Sat/Sun
-                current_day += timedelta(days=1)
-
             # Parse LLM-chosen start_time (HH:MM); fall back to a random time if invalid
             raw_time = details.get('start_time', '')
             try:
                 t_parts = raw_time.strip().split(':')
-                hour = int(t_parts[0])
-                minute = int(t_parts[1]) if len(t_parts) > 1 else 0
-                # Clamp: meetings are 2 hours, working window 10:00–17:00
-                if not (10 <= hour <= 17):
+                desired_hour = int(t_parts[0])
+                desired_minute = int(t_parts[1]) if len(t_parts) > 1 else 0
+                if not (10 <= desired_hour <= 17):
                     raise ValueError("out of range")
-                if hour == 17 and minute > 0:
-                    minute = 0  # latest start is exactly 17:00
+                if desired_hour == 17 and desired_minute > 0:
+                    desired_minute = 0
             except Exception:
-                # Fallback: random time between 10:00 and 17:00 (on-the-hour slots)
-                hour = random.randint(10, 17)
-                minute = random.choice([0, 15, 30, 45])
-                if hour == 17:
-                    minute = 0
+                desired_hour = random.randint(10, 17)
+                desired_minute = random.choice([0, 15, 30, 45])
+                if desired_hour == 17:
+                    desired_minute = 0
 
+            desired_start = desired_hour * 60 + desired_minute
+
+            scheduled = False
+            days_checked = 0
+            while not scheduled and days_checked < 30:
+                while current_day.weekday() > 4:  # Skip Sat/Sun
+                    current_day += timedelta(days=1)
+
+                day_start = current_day.strftime('%Y-%m-%d 00:00:00')
+                day_end = (current_day + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
+                format_strings_sh = ','.join(['%s'] * len(valid_stakeholder_ids))
+                
+                existing_query = f"""
+                    SELECT m.scheduled_at 
+                    FROM meetings m
+                    JOIN attendance a ON m.id = a.meeting_id
+                    WHERE a.stakeholder_id IN ({format_strings_sh})
+                      AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                      AND m.status = 'scheduled'
+                """
+                params = tuple(valid_stakeholder_ids) + (day_start, day_end)
+                try:
+                    existing_meetings = execute_query(existing_query, params)
+                except Exception:
+                    existing_query_fb = f"""
+                        SELECT m.scheduled_at 
+                        FROM meetings m
+                        JOIN attendance a ON m.id = a.meeting_id
+                        WHERE a.stakeholder_id IN ({format_strings_sh})
+                          AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                    """
+                    existing_meetings = execute_query(existing_query_fb, params)
+
+                existing_starts = []
+                if existing_meetings:
+                    for row in existing_meetings:
+                        dt = row['scheduled_at']
+                        if isinstance(dt, str):
+                            try:
+                                if 'T' in dt:
+                                    dt = datetime.strptime(dt.replace('T', ' '), "%Y-%m-%d %H:%M:%S")
+                                else:
+                                    dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                dt = datetime.fromisoformat(dt)
+                        existing_starts.append(dt.hour * 60 + dt.minute)
+
+                has_overlap = False
+                for ext_start in existing_starts:
+                    if abs(desired_start - ext_start) < 120:
+                        has_overlap = True
+                        break
+
+                if not has_overlap:
+                    final_start = desired_start
+                    scheduled = True
+                else:
+                    found_slot = False
+                    for slot in range(600, 1021, 15):
+                        slot_overlap = False
+                        for ext_start in existing_starts:
+                            if abs(slot - ext_start) < 120:
+                                slot_overlap = True
+                                break
+                        if not slot_overlap:
+                            final_start = slot
+                            scheduled = True
+                            found_slot = True
+                            break
+                    
+                    if not found_slot:
+                        current_day += timedelta(days=1)
+                        days_checked += 1
+
+            if not scheduled:
+                raise Exception("Could not find an available time slot for the participants.")
+
+            hour = final_start // 60
+            minute = final_start % 60
             current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
             formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
             
@@ -358,6 +432,10 @@ def reschedule_meeting(id):
 
         reschedule_subsequent = data.get('reschedule_subsequent', False)
         
+        proposed_meetings = [(id, new_dt)]
+        subsequent_meetings = []
+        plan_id = meeting['plan_id']
+        
         if reschedule_subsequent:
             biz_days_shift = 0
             temp_date = existing_dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -376,20 +454,11 @@ def reschedule_meeting(id):
                         
             dt_same_day = existing_dt.replace(year=new_dt.year, month=new_dt.month, day=new_dt.day)
             time_of_day_delta = new_dt - dt_same_day
-
-            plan_id = meeting['plan_id']
             
             subsequent_meetings = execute_query(
                 "SELECT id, scheduled_at FROM meetings WHERE plan_id = %s AND scheduled_at > %s AND status = 'scheduled' ORDER BY scheduled_at ASC",
                 (plan_id, existing_dt.strftime('%Y-%m-%d %H:%M:%S'))
             )
-            
-            execute_write(
-                "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
-                (new_dt_str, id)
-            )
-            
-            notified_ids = [(id, new_dt)]
             
             for sub_m in subsequent_meetings:
                 sub_existing_dt = sub_m['scheduled_at']
@@ -420,35 +489,153 @@ def reschedule_meeting(id):
                 while sub_new_dt.weekday() > 4:
                     sub_new_dt += timedelta(days=1)
                 
-                execute_write(
-                    "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
-                    (sub_new_dt.strftime('%Y-%m-%d %H:%M:%S'), sub_m['id'])
-                )
-                notified_ids.append((sub_m['id'], sub_new_dt))
-                
-            try:
-                from services.notification_service import trigger_reschedule_notifications
-                for m_id, m_new_dt in notified_ids:
-                    trigger_reschedule_notifications(m_id, m_new_dt, reason)
-            except Exception as notify_err:
-                print(f"Error triggering reschedule notifications: {notify_err}")
+                proposed_meetings.append((sub_m['id'], sub_new_dt))
+
+        # Check for overlaps
+        att_rows = execute_query("SELECT stakeholder_id FROM attendance WHERE meeting_id = %s", (id,))
+        stakeholders = [r['stakeholder_id'] for r in att_rows]
+        
+        final_proposed_meetings = []
+        time_was_adjusted = False
+
+        if stakeholders:
+            format_strings_sh = ','.join(['%s'] * len(stakeholders))
+            prop_ids = [m[0] for m in proposed_meetings]
+            format_strings_prop = ','.join(['%s'] * len(prop_ids))
             
-            msg = f"Meeting and {len(subsequent_meetings)} subsequent meetings rescheduled successfully. Participants will be notified via email."
+            assigned_slots_by_date = {}
+
+            for m_id, prop_dt in proposed_meetings:
+                current_day = prop_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                desired_start = prop_dt.hour * 60 + prop_dt.minute
+                
+                scheduled = False
+                days_checked = 0
+                
+                while not scheduled and days_checked < 30:
+                    while current_day.weekday() > 4:  # Skip Sat/Sun
+                        current_day += timedelta(days=1)
+                        time_was_adjusted = True
+
+                    day_start_str = current_day.strftime('%Y-%m-%d 00:00:00')
+                    day_end = current_day + timedelta(days=1)
+                    day_end_str = day_end.strftime('%Y-%m-%d 00:00:00')
+                    
+                    existing_query = f"""
+                        SELECT m.scheduled_at 
+                        FROM meetings m
+                        JOIN attendance a ON m.id = a.meeting_id
+                        WHERE a.stakeholder_id IN ({format_strings_sh})
+                          AND m.id NOT IN ({format_strings_prop})
+                          AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                          AND m.status = 'scheduled'
+                    """
+                    params = tuple(stakeholders) + tuple(prop_ids) + (day_start_str, day_end_str)
+                    try:
+                        existing_meetings = execute_query(existing_query, params)
+                    except Exception:
+                        existing_query_fb = f"""
+                            SELECT m.scheduled_at 
+                            FROM meetings m
+                            JOIN attendance a ON m.id = a.meeting_id
+                            WHERE a.stakeholder_id IN ({format_strings_sh})
+                              AND m.id NOT IN ({format_strings_prop})
+                              AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                        """
+                        existing_meetings = execute_query(existing_query_fb, params)
+
+                    existing_starts = []
+                    if existing_meetings:
+                        for row in existing_meetings:
+                            ext_dt = row['scheduled_at']
+                            if isinstance(ext_dt, str):
+                                try:
+                                    if 'T' in ext_dt:
+                                        ext_dt = datetime.strptime(ext_dt.replace('T', ' '), "%Y-%m-%d %H:%M:%S")
+                                    else:
+                                        ext_dt = datetime.strptime(ext_dt, "%Y-%m-%d %H:%M:%S")
+                                except ValueError:
+                                    ext_dt = datetime.fromisoformat(ext_dt)
+                            
+                            existing_starts.append(ext_dt.hour * 60 + ext_dt.minute)
+                            
+                    date_key = current_day.strftime('%Y-%m-%d')
+                    if date_key in assigned_slots_by_date:
+                        existing_starts.extend(assigned_slots_by_date[date_key])
+
+                    has_overlap = False
+                    for ext_start in existing_starts:
+                        if abs(desired_start - ext_start) < 120:
+                            has_overlap = True
+                            break
+
+                    if not has_overlap:
+                        final_start = desired_start
+                        scheduled = True
+                    else:
+                        found_slot = False
+                        for slot in range(600, 1021, 15):
+                            slot_overlap = False
+                            for ext_start in existing_starts:
+                                if abs(slot - ext_start) < 120:
+                                    slot_overlap = True
+                                    break
+                            if not slot_overlap:
+                                final_start = slot
+                                scheduled = True
+                                found_slot = True
+                                time_was_adjusted = True
+                                break
+                        
+                        if not found_slot:
+                            current_day += timedelta(days=1)
+                            days_checked += 1
+                            time_was_adjusted = True
+                            desired_start = 600 # default to 10:00 on the next day if we must advance
+
+                if not scheduled:
+                    return jsonify({"success": False, "message": "Could not find a free slot to reschedule the meetings without overlaps."}), 400
+
+                hour = final_start // 60
+                minute = final_start % 60
+                final_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                final_proposed_meetings.append((m_id, final_dt))
+                
+                final_date_key = current_day.strftime('%Y-%m-%d')
+                if final_date_key not in assigned_slots_by_date:
+                    assigned_slots_by_date[final_date_key] = []
+                assigned_slots_by_date[final_date_key].append(final_start)
         else:
-            # Update DB
+            final_proposed_meetings = proposed_meetings
+            time_was_adjusted = False
+
+        # No overlaps found, safe to update database
+        for m_id, prop_dt in final_proposed_meetings:
             execute_write(
                 "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
-                (new_dt_str, id)
+                (prop_dt.strftime('%Y-%m-%d %H:%M:%S'), m_id)
             )
 
-            # Fire reschedule notifications in background
+        if reschedule_subsequent:
             try:
                 from services.notification_service import trigger_reschedule_notifications
-                trigger_reschedule_notifications(id, new_dt, reason)
+                for m_id, prop_dt in final_proposed_meetings:
+                    trigger_reschedule_notifications(m_id, prop_dt, reason)
             except Exception as notify_err:
                 print(f"Error triggering reschedule notifications: {notify_err}")
-
-            msg = f"Meeting rescheduled to {new_dt_str}. Participants will be notified via email."
+            msg = f"Meeting and {len(subsequent_meetings)} subsequent meetings rescheduled successfully. Participants will be notified via email."
+            if time_was_adjusted:
+                msg = "Rescheduled successfully. Some meeting times were adjusted to prevent overlaps. Participants notified."
+        else:
+            final_dt = final_proposed_meetings[0][1]
+            try:
+                from services.notification_service import trigger_reschedule_notifications
+                trigger_reschedule_notifications(id, final_dt, reason)
+            except Exception as notify_err:
+                print(f"Error triggering reschedule notifications: {notify_err}")
+            msg = f"Meeting rescheduled to {final_dt.strftime('%Y-%m-%d %H:%M')}. Participants will be notified via email."
+            if time_was_adjusted:
+                msg = f"Meeting time adjusted to {final_dt.strftime('%Y-%m-%d %H:%M')} to prevent overlap. Participants notified."
 
         return jsonify({
             "success": True,
