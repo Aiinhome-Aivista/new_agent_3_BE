@@ -142,8 +142,11 @@ def escalate_risk_service(risk_id, assigned_to=[], initial_note=None, manager_id
     query = "UPDATE risks SET jira_ticket_ref = %s WHERE id = %s"
     execute_write(query, (jira_ref, risk_id))
     
+    del_query = "DELETE FROM risk_assignments WHERE risk_id = %s"
+    execute_write(del_query, (risk_id,))
+    
     for stakeholder_id in assigned_to:
-        assign_query = "INSERT IGNORE INTO risk_assignments (risk_id, stakeholder_id) VALUES (%s, %s)"
+        assign_query = "INSERT INTO risk_assignments (risk_id, stakeholder_id) VALUES (%s, %s)"
         execute_write(assign_query, (risk_id, stakeholder_id))
         
     if initial_note and manager_id:

@@ -36,13 +36,14 @@ def get_risks():
             
         for r in risks:
             assignees_query = """
-                SELECT s.name 
+                SELECT s.id, s.name 
                 FROM risk_assignments ra
                 JOIN stakeholders s ON ra.stakeholder_id = s.id
                 WHERE ra.risk_id = %s
             """
             assignees = execute_query(assignees_query, (r['id'],))
             r['assigned_stakeholders'] = [a['name'] for a in assignees] if assignees else []
+            r['assigned_to'] = [a['id'] for a in assignees] if assignees else []
             
             comments_query = """
                 SELECT rc.id, rc.comment_text, rc.created_at, s.name as stakeholder_name, s.role 
