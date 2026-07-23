@@ -728,6 +728,8 @@ def get_meeting_feedback(id):
             for row in fb_rows:
                 existing_feedback_dict[row['knowledge_giver_id']] = row
 
+        already_submitted = len(existing_feedback_dict) > 0
+
         result_givers = []
         for g in giver_list:
             fb = existing_feedback_dict.get(g['id'], {})
@@ -744,7 +746,8 @@ def get_meeting_feedback(id):
             "success": True,
             "meeting": meeting_obj,
             "givers": result_givers,
-            "receiver_id": receiver_id
+            "receiver_id": receiver_id,
+            "already_submitted": already_submitted
         }), 200
     except Exception as e:
         print(f"Error in get_meeting_feedback: {e}")
@@ -772,6 +775,17 @@ def submit_meeting_feedback(id):
         if not meeting:
             return jsonify({"success": False, "message": "Meeting not found"}), 404
         plan_id = meeting[0]['plan_id']
+
+        # Check if feedback has already been submitted by this receiver for this meeting
+        existing_check = execute_query(
+            "SELECT id FROM meeting_feedback WHERE meeting_id = %s AND knowledge_receiver_id = %s LIMIT 1",
+            (id, receiver_id)
+        )
+        if existing_check:
+            return jsonify({
+                "success": False,
+                "message": "Feedback has already been submitted for this session and cannot be changed."
+            }), 400
 
         data = request.json or {}
         feedbacks = data.get('feedbacks', [])
