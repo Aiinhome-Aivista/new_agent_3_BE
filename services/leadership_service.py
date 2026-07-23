@@ -6,6 +6,7 @@ def get_manager_wise_summary():
         SELECT kp.id as plan_id, kp.application_name, kp.status, kp.approved_by, s.name as manager_name
         FROM kt_plans kp
         LEFT JOIN stakeholders s ON kp.approved_by = s.id
+        WHERE kp.status NOT IN ('draft', 'waiting_for_approval')
     """
     plans = execute_query(plans_query)
 
@@ -27,9 +28,15 @@ def get_manager_wise_summary():
         topic_count_res = execute_query(topic_count_query, (p['plan_id'],))
         topic_count = int(topic_count_res[0]['cnt']) if topic_count_res and topic_count_res[0]['cnt'] else 0
 
+        # Fetch the receiver name
+        receiver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'incoming_member' OR s.role LIKE '%incoming%')"
+        receiver_res = execute_query(receiver_query, (p['plan_id'],))
+        receiver_name = ", ".join([r['name'] for r in receiver_res]) if receiver_res else "Unassigned / Not Started"
+
         managers[manager_key]["plans"].append({
             "plan_id": p['plan_id'],
             "application_name": p['application_name'],
+            "receiver_name": receiver_name,
             "status": p['status'],
             "completion_percent": plan_completion,
             "attendance_percent": plan_attendance,
@@ -176,3 +183,48 @@ def get_manager_wise_risk_summary():
         "total_managers": len(result)
     }
 
+def get_knowledge_giver_ranking():
+    query_overall = """
+        SELECT s.id as giver_id, s.name as giver_name, s.role, COUNT(mf.id) as total_feedbacks, AVG(mf.rating) as average_rating
+        FROM meeting_feedback mf
+        JOIN stakeholders s ON mf.knowledge_giver_id = s.id
+        GROUP BY mf.knowledge_giver_id
+        ORDER BY average_rating DESC
+    """
+    overall_results = execute_query(query_overall)
+    
+    query_plan = """
+        SELECT s.id as giver_id, mf.plan_id, p.application_name as plan_name, COUNT(mf.id) as total_feedbacks, AVG(mf.rating) as average_rating
+        FROM meeting_feedback mf
+        JOIN stakeholders s ON mf.knowledge_giver_id = s.id
+        LEFT JOIN kt_plans p ON mf.plan_id = p.id
+        GROUP BY mf.knowledge_giver_id, mf.plan_id
+    """
+    plan_results = execute_query(query_plan)
+    
+    givers = []
+    for row in overall_results:
+        giver_id = row['giver_id']
+        plans = []
+        for pr in plan_results:
+            if pr['giver_id'] == giver_id:
+                plans.append({
+                    "plan_id": pr['plan_id'],
+                    "plan_name": pr['plan_name'],
+                    "total_feedbacks": int(pr['total_feedbacks']),
+                    "average_rating": round(float(pr['average_rating']), 2) if pr['average_rating'] else 0.0
+                })
+        
+        givers.append({
+            "giver_id": giver_id,
+            "giver_name": row["giver_name"],
+            "role": row["role"],
+            "total_feedbacks": int(row["total_feedbacks"]),
+            "average_rating": round(float(row["average_rating"]), 2) if row["average_rating"] else 0.0,
+            "plans": plans
+        })
+        
+    return {
+        "knowledge_givers": givers,
+        "total_givers_rated": len(givers)
+    }

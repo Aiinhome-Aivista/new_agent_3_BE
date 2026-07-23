@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify
-from services.leadership_service import get_manager_wise_summary, get_manager_wise_risk_summary
+from services.leadership_service import get_manager_wise_summary, get_manager_wise_risk_summary, get_knowledge_giver_ranking
 
 leadership_bp = Blueprint('leadership_bp', __name__)
 
@@ -15,6 +15,14 @@ def get_completion_summary():
 def get_risk_summary():
     try:
         summary = get_manager_wise_risk_summary()
+        return jsonify({"success": True, "data": summary}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@leadership_bp.route('/giver-summary', methods=['GET'])
+def get_giver_summary():
+    try:
+        summary = get_knowledge_giver_ranking()
         return jsonify({"success": True, "data": summary}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
