@@ -18,6 +18,9 @@ def get_manager_wise_summary():
         # Reuse the EXACT SAME calculation the Tracking page uses — guarantees the numbers always match
         plan_summary = get_plan_summary_service(p['plan_id'])
         plan_completion = plan_summary['avg_completion_percent']
+        plan_attendance = plan_summary.get('attendance_rate_percent', 0)
+        
+        wmo_score = round((plan_completion * 0.8) + (plan_attendance * 0.2), 2)
 
         # Topic count for this plan, used to weight the manager-level aggregate
         topic_count_query = "SELECT COUNT(*) as cnt FROM plan_topics WHERE plan_id = %s"
@@ -29,6 +32,8 @@ def get_manager_wise_summary():
             "application_name": p['application_name'],
             "status": p['status'],
             "completion_percent": plan_completion,
+            "attendance_percent": plan_attendance,
+            "wmo_score": wmo_score,
             "topic_count": topic_count
         })
 
@@ -38,27 +43,42 @@ def get_manager_wise_summary():
         total_weight = sum(pl['topic_count'] for pl in plans_list)
 
         if total_weight > 0:
-            weighted_sum = sum(pl['completion_percent'] * pl['topic_count'] for pl in plans_list)
-            overall = round(weighted_sum / total_weight, 2)
+            weighted_sum_comp = sum(pl['completion_percent'] * pl['topic_count'] for pl in plans_list)
+            overall_comp = round(weighted_sum_comp / total_weight, 2)
+            
+            weighted_sum_att = sum(pl['attendance_percent'] * pl['topic_count'] for pl in plans_list)
+            overall_att = round(weighted_sum_att / total_weight, 2)
         elif plans_list:
             # Fallback if no plan has any topics defined yet: simple average
-            overall = round(sum(pl['completion_percent'] for pl in plans_list) / len(plans_list), 2)
+            overall_comp = round(sum(pl['completion_percent'] for pl in plans_list) / len(plans_list), 2)
+            overall_att = round(sum(pl['attendance_percent'] for pl in plans_list) / len(plans_list), 2)
         else:
-            overall = 0.0
+            overall_comp = 0.0
+            overall_att = 0.0
+
+        overall_wmo = round((overall_comp * 0.8) + (overall_att * 0.2), 2)
 
         result.append({
             "manager_name": m["manager_name"],
             "total_plans": len(plans_list),
-            "overall_completion_percent": overall,
+            "overall_completion_percent": overall_comp,
+            "overall_attendance_percent": overall_att,
+            "overall_wmo_score": overall_wmo,
             "plans": plans_list
         })
 
     all_plan_completions = [pl['completion_percent'] for m in result for pl in m['plans']]
-    combined_avg = round(sum(all_plan_completions) / len(all_plan_completions), 2) if all_plan_completions else 0.0
+    all_plan_attendances = [pl['attendance_percent'] for m in result for pl in m['plans']]
+    
+    combined_comp_avg = round(sum(all_plan_completions) / len(all_plan_completions), 2) if all_plan_completions else 0.0
+    combined_att_avg = round(sum(all_plan_attendances) / len(all_plan_attendances), 2) if all_plan_attendances else 0.0
+    combined_wmo = round((combined_comp_avg * 0.8) + (combined_att_avg * 0.2), 2)
 
     return {
         "managers": result,
-        "combined_average_completion_percent": combined_avg,
+        "combined_average_completion_percent": combined_comp_avg,
+        "combined_average_attendance_percent": combined_att_avg,
+        "combined_average_wmo_score": combined_wmo,
         "total_managers": len(result)
     }
 
