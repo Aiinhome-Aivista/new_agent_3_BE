@@ -100,12 +100,14 @@ def get_manager_wise_risk_summary():
 
         plan_risks = [r for r in all_risks if r['plan_id'] == p['plan_id']]
         
-        severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0}
+        severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0, 'waiting_for_approval': 0}
         for r in plan_risks:
             if r['status'] == 'solved' or r['status'] == 'resolved':
                 severity_counts['solved'] += 1
             elif r['status'] == 'in_progress':
                 severity_counts['in_progress'] += 1
+            elif r['status'] == 'waiting_for_approval':
+                severity_counts['waiting_for_approval'] += 1
             else:
                 sev = r['severity'].lower()
                 if sev in severity_counts:
@@ -133,7 +135,7 @@ def get_manager_wise_risk_summary():
         total_risks_all += m_total_risks
         total_open_risks_all += m_open_risks
         
-        m_severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0}
+        m_severity_counts = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0, 'solved': 0, 'in_progress': 0, 'waiting_for_approval': 0}
         for pl in plans_list:
             for sev, count in pl['severity_counts'].items():
                 m_severity_counts[sev] += count
