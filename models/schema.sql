@@ -138,3 +138,10 @@ CREATE TABLE IF NOT EXISTS plan_topics (
     FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS holidays (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    holiday_date DATE NOT NULL,
+    holiday_name VARCHAR(255) NOT NULL,
+    holiday_year INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

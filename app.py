@@ -18,6 +18,7 @@ from Controller.knowledge_controller import knowledge_bp
 from Controller.guardrails_controller import guardrails_bp
 from Controller.google_auth_controller import google_auth_bp
 from Controller.leadership_controller import leadership_bp
+from Controller.holiday_controller import holiday_bp
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -63,6 +64,7 @@ def create_app():
     app.register_blueprint(guardrails_bp, url_prefix="/api/guardrails")
     app.register_blueprint(google_auth_bp, url_prefix="/auth/google")
     app.register_blueprint(leadership_bp, url_prefix="/api/leadership")
+    app.register_blueprint(holiday_bp, url_prefix="/api/holidays")
     
     @app.route("/api/health")
     def health():
