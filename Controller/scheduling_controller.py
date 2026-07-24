@@ -122,6 +122,21 @@ For example:
         # Use start_date as the rolling day pointer (time is set per-meeting below)
         current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
+        # Fetch holidays
+        try:
+            holiday_query = "SELECT holiday_date FROM holidays"
+            holidays_result = execute_query(holiday_query, ())
+            holiday_dates = set()
+            if holidays_result:
+                for h in holidays_result:
+                    if isinstance(h['holiday_date'], str):
+                        holiday_dates.add(h['holiday_date'][:10])
+                    else:
+                        holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
+        except Exception as e:
+            print(f"Error fetching holidays: {e}")
+            holiday_dates = set()
+
         meeting_ids = []
         for idx, details in enumerate(day_details):
             # Parse LLM-chosen start_time (HH:MM); fall back to a random time if invalid
@@ -145,7 +160,7 @@ For example:
             scheduled = False
             days_checked = 0
             while not scheduled and days_checked < 30:
-                while current_day.weekday() > 4:  # Skip Sat/Sun
+                while current_day.weekday() > 4 or current_day.strftime('%Y-%m-%d') in holiday_dates:  # Skip Sat/Sun/Holidays
                     current_day += timedelta(days=1)
 
                 day_start = current_day.strftime('%Y-%m-%d 00:00:00')
@@ -424,9 +439,24 @@ def reschedule_meeting(id):
             new_dt = existing_dt.replace(year=int(date_parts[0]), month=int(date_parts[1]), day=int(date_parts[2]), hour=hour, minute=minute, second=0, microsecond=0)
         else:
             new_dt = existing_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        # Fetch holidays
+        try:
+            holiday_query = "SELECT holiday_date FROM holidays"
+            holidays_result = execute_query(holiday_query, ())
+            holiday_dates = set()
+            if holidays_result:
+                for h in holidays_result:
+                    if isinstance(h['holiday_date'], str):
+                        holiday_dates.add(h['holiday_date'][:10])
+                    else:
+                        holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
+        except Exception as e:
+            print(f"Error fetching holidays: {e}")
+            holiday_dates = set()
             
-        if new_dt.weekday() > 4:
-            return jsonify({"success": False, "message": "Meetings cannot be rescheduled to a weekend (Saturday or Sunday)."}), 400
+        if new_dt.weekday() > 4 or new_dt.strftime('%Y-%m-%d') in holiday_dates:
+            return jsonify({"success": False, "message": "Meetings cannot be rescheduled to a weekend or a holiday."}), 400
             
         new_dt_str = new_dt.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -444,12 +474,12 @@ def reschedule_meeting(id):
             if end_date_only > temp_date:
                 while temp_date < end_date_only:
                     temp_date += timedelta(days=1)
-                    if temp_date.weekday() <= 4:
+                    if temp_date.weekday() <= 4 and temp_date.strftime('%Y-%m-%d') not in holiday_dates:
                         biz_days_shift += 1
             elif end_date_only < temp_date:
                 while temp_date > end_date_only:
                     temp_date -= timedelta(days=1)
-                    if temp_date.weekday() <= 4:
+                    if temp_date.weekday() <= 4 and temp_date.strftime('%Y-%m-%d') not in holiday_dates:
                         biz_days_shift -= 1
                         
             dt_same_day = existing_dt.replace(year=new_dt.year, month=new_dt.month, day=new_dt.day)
@@ -476,17 +506,17 @@ def reschedule_meeting(id):
                 if shifts_left > 0:
                     while shifts_left > 0:
                         sub_new_dt += timedelta(days=1)
-                        if sub_new_dt.weekday() <= 4:
+                        if sub_new_dt.weekday() <= 4 and sub_new_dt.strftime('%Y-%m-%d') not in holiday_dates:
                             shifts_left -= 1
                 elif shifts_left < 0:
                     while shifts_left < 0:
                         sub_new_dt -= timedelta(days=1)
-                        if sub_new_dt.weekday() <= 4:
+                        if sub_new_dt.weekday() <= 4 and sub_new_dt.strftime('%Y-%m-%d') not in holiday_dates:
                             shifts_left += 1
                             
                 sub_new_dt += time_of_day_delta
                 
-                while sub_new_dt.weekday() > 4:
+                while sub_new_dt.weekday() > 4 or sub_new_dt.strftime('%Y-%m-%d') in holiday_dates:
                     sub_new_dt += timedelta(days=1)
                 
                 proposed_meetings.append((sub_m['id'], sub_new_dt))
@@ -513,7 +543,7 @@ def reschedule_meeting(id):
                 days_checked = 0
                 
                 while not scheduled and days_checked < 30:
-                    while current_day.weekday() > 4:  # Skip Sat/Sun
+                    while current_day.weekday() > 4 or current_day.strftime('%Y-%m-%d') in holiday_dates:  # Skip Sat/Sun/Holidays
                         current_day += timedelta(days=1)
                         time_was_adjusted = True
 
