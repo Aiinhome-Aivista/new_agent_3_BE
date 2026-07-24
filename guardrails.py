@@ -59,6 +59,86 @@ def dialog_rail(question: str, endpoint: str, has_context: bool = False) -> tupl
         log_guardrail("dialog", False, reason, endpoint)
         return False, reason
 
+def dialog_rail2(question: str, endpoint: str, has_context: bool = False) -> tuple[bool, str]:
+
+        if has_context:
+            prompt = f"""
+    You are a guardrail for a Virtual KT Manager assistant.
+
+    Allow questions related to:
+    - KT plans
+    - Meetings
+    - Meeting schedules
+    - Meeting links
+    - Organizers
+    - Attendance
+    - Stakeholders
+    - Risks
+    - Topics
+    - Applications
+    - Knowledge documents
+    - Reports
+    - Assessments
+    - Completion tracking
+    - Technical implementation
+    - Project architecture
+    - APIs
+    - Training content
+    - KT processes
+
+    Return ONLY one word:
+
+    YES
+    or
+    NO
+
+    Question:
+    {question}
+    """
+        else:
+            prompt = f"""
+    You are a guardrail for a Knowledge Transfer assistant.
+
+    Allow questions related to:
+    - KT plans
+    - Meetings
+    - Schedules
+    - Risks
+    - Attendance
+    - Stakeholders
+    - Topics
+    - Assessments
+    - Training
+    - Technical documentation
+    - Knowledge base
+
+    Reject unrelated questions.
+
+    Return ONLY:
+
+    YES
+    or
+    NO
+
+    Question:
+    {question}
+    """
+
+        llm_resp = call_llm(prompt)
+
+        if not llm_resp:
+            log_guardrail("dialog", True, "LLM failed, failing open", endpoint)
+            return True, ""
+
+        if llm_resp.strip().upper() == "YES":
+            log_guardrail("dialog", True, "Passed", endpoint)
+            return True, ""
+        else:
+            reason = "Off-topic question detected"
+            log_guardrail("dialog", False, reason, endpoint)
+            return False, reason
+
+
 def retrieval_rail(chunks: list[dict], threshold: float = 0.8, endpoint: str = "retrieval") -> tuple[bool, str]:
     if not chunks:
         log_guardrail("retrieval", True, "No chunks retrieved", endpoint)
