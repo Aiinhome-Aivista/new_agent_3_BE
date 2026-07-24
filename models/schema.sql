@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS risks (
     plan_id INT NOT NULL,
     description TEXT NOT NULL,
     severity ENUM('low','medium','high','critical') NOT NULL,
-    status ENUM('open','in_progress','escalated','waiting_for_approval','solved','resolved') DEFAULT 'open',
+    status ENUM('open','in_progress','escalated','deferred','solved','resolved') DEFAULT 'open',
     detected_by ENUM('ai','manual') NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     jira_ticket_ref VARCHAR(255) NULL,
