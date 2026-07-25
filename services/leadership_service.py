@@ -16,22 +16,61 @@ def get_manager_wise_summary():
         if manager_key not in managers:
             managers[manager_key] = {"manager_name": manager_key, "plans": []}
 
-        # Reuse the EXACT SAME calculation the Tracking page uses — guarantees the numbers always match
-        plan_summary = get_plan_summary_service(p['plan_id'])
-        plan_completion = plan_summary['avg_completion_percent']
-        plan_attendance = plan_summary.get('attendance_rate_percent', 0)
-        
-        wmo_score = round((plan_completion * 0.8) + (plan_attendance * 0.2), 2)
+        # Plan completion and attendance will now be calculated based on the average of receiver assessment scores
 
         # Topic count for this plan, used to weight the manager-level aggregate
         topic_count_query = "SELECT COUNT(*) as cnt FROM plan_topics WHERE plan_id = %s"
         topic_count_res = execute_query(topic_count_query, (p['plan_id'],))
         topic_count = int(topic_count_res[0]['cnt']) if topic_count_res and topic_count_res[0]['cnt'] else 0
 
-        # Fetch the receiver name
-        receiver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'incoming_member' OR s.role LIKE '%incoming%')"
+        # Fetch the receivers
+        receiver_query = "SELECT DISTINCT s.id, s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'incoming_member' OR s.role LIKE '%incoming%')"
         receiver_res = execute_query(receiver_query, (p['plan_id'],))
-        receiver_name = ", ".join([r['name'] for r in receiver_res]) if receiver_res else "Unassigned / Not Started"
+        
+        receivers = []
+        if receiver_res:
+            for r in receiver_res:
+                # Calculate receiver-specific completion based on sum of all assessments
+                asmt_query = "SELECT SUM(overall_score) as total_score, COUNT(*) as asmt_count FROM assessment_results WHERE plan_id = %s AND stakeholder_id = %s"
+                asmt_res = execute_query(asmt_query, (p['plan_id'], r['id']))
+                
+                total_score = float(asmt_res[0]['total_score']) if asmt_res and asmt_res[0]['total_score'] is not None else 0.0
+                asmt_count = int(asmt_res[0]['asmt_count']) if asmt_res and asmt_res[0]['asmt_count'] else 0
+                
+                if asmt_count > 0:
+                    # (sum of all assessment marks obtained / sum of all assessment total marks) * 100
+                    receiver_completion = min(100.0, round((total_score / (asmt_count * 50.0)) * 100.0, 2))
+                else:
+                    receiver_completion = 0.0
+                
+                # Calculate receiver-specific attendance
+                att_query = "SELECT COUNT(*) as total_meetings, SUM(CASE WHEN attended = 1 THEN 1 ELSE 0 END) as attended_meetings FROM attendance a JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND a.stakeholder_id = %s"
+                att_res = execute_query(att_query, (p['plan_id'], r['id']))
+                if att_res and att_res[0]['total_meetings'] and int(att_res[0]['total_meetings']) > 0:
+                    receiver_attendance = round((float(att_res[0]['attended_meetings']) / float(att_res[0]['total_meetings'])) * 100.0, 2)
+                else:
+                    receiver_attendance = 0.0
+                    
+                receiver_wmo = round((receiver_completion * 0.8) + (receiver_attendance * 0.2), 2)
+                
+                receivers.append({
+                    "id": r['id'],
+                    "name": r['name'],
+                    "completion_percent": receiver_completion,
+                    "attendance_percent": receiver_attendance,
+                    "wmo_score": receiver_wmo
+                })
+                
+        receiver_name = ", ".join([r['name'] for r in receivers]) if receivers else "Unassigned / Not Started"
+
+        if receivers:
+            plan_completion = round(sum(r['completion_percent'] for r in receivers) / len(receivers), 2)
+            plan_attendance = round(sum(r['attendance_percent'] for r in receivers) / len(receivers), 2)
+        else:
+            plan_completion = 0.0
+            plan_attendance = 0.0
+            
+        wmo_score = round((plan_completion * 0.8) + (plan_attendance * 0.2), 2)
 
         managers[manager_key]["plans"].append({
             "plan_id": p['plan_id'],
@@ -41,7 +80,8 @@ def get_manager_wise_summary():
             "completion_percent": plan_completion,
             "attendance_percent": plan_attendance,
             "wmo_score": wmo_score,
-            "topic_count": topic_count
+            "topic_count": topic_count,
+            "receivers": receivers
         })
 
     result = []
@@ -74,11 +114,13 @@ def get_manager_wise_summary():
             "plans": plans_list
         })
 
-    all_plan_completions = [pl['completion_percent'] for m in result for pl in m['plans']]
-    all_plan_attendances = [pl['attendance_percent'] for m in result for pl in m['plans']]
+    all_individual_completions = [r['completion_percent'] for m in result for pl in m['plans'] for r in pl.get('receivers', [])]
+    all_individual_attendances = [r['attendance_percent'] for m in result for pl in m['plans'] for r in pl.get('receivers', [])]
     
-    combined_comp_avg = round(sum(all_plan_completions) / len(all_plan_completions), 2) if all_plan_completions else 0.0
-    combined_att_avg = round(sum(all_plan_attendances) / len(all_plan_attendances), 2) if all_plan_attendances else 0.0
+    total_participations = len(all_individual_completions)
+    
+    combined_comp_avg = round(sum(all_individual_completions) / total_participations, 2) if total_participations > 0 else 0.0
+    combined_att_avg = round(sum(all_individual_attendances) / total_participations, 2) if total_participations > 0 else 0.0
     combined_wmo = round((combined_comp_avg * 0.8) + (combined_att_avg * 0.2), 2)
 
     return {
