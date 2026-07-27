@@ -240,12 +240,24 @@ def complete_assessment():
         overall_feedback = call_llm(prompt)
         overall_feedback = overall_feedback.strip()
         
+        # Capture completed topics snapshot at completion time
+        passed_topics = data.get('covered_topics')
+        if passed_topics is not None:
+            covered_topics_json = json.dumps(passed_topics) if isinstance(passed_topics, list) else passed_topics
+        else:
+            completed_topics_res = execute_query(
+                "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
+                (plan_id,)
+            )
+            covered_topics_list = [row['topic'] for row in completed_topics_res] if completed_topics_res else []
+            covered_topics_json = json.dumps(covered_topics_list)
+
         # Save parent summary row into assessment_results
         insert_query = """
-            INSERT INTO assessment_results (asid, plan_id, stakeholder_id, overall_score, feedback)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO assessment_results (asid, plan_id, stakeholder_id, overall_score, feedback, covered_topics)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
-        execute_write(insert_query, (asid, plan_id, stakeholder_id, overall_score, overall_feedback))
+        execute_write(insert_query, (asid, plan_id, stakeholder_id, overall_score, overall_feedback, covered_topics_json))
         
         # Fetch the new assessment_results.id to back-fill assessments.asmt_id
         id_query = "SELECT id FROM assessment_results WHERE asid = %s"

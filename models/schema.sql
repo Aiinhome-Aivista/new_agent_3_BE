@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS assessments (
     FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS assessment_results (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    asid VARCHAR(255) UNIQUE,
+    plan_id INT NOT NULL,
+    stakeholder_id INT NOT NULL,
+    overall_score FLOAT NOT NULL,
+    feedback TEXT,
+    covered_topics JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (plan_id) REFERENCES kt_plans(id) ON DELETE CASCADE,
+    FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS reports (
     id INT AUTO_INCREMENT PRIMARY KEY,
     plan_id INT NOT NULL,
