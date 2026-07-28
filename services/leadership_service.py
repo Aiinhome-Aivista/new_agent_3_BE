@@ -131,6 +131,81 @@ def get_manager_wise_summary():
         "total_managers": len(result)
     }
 
+def get_manager_wise_tracking_summary():
+    plans_query = """
+        SELECT kp.id as plan_id, kp.application_name, kp.status, kp.approved_by, s.name as manager_name
+        FROM kt_plans kp
+        LEFT JOIN stakeholders s ON kp.approved_by = s.id
+        WHERE kp.status NOT IN ('draft', 'waiting_for_approval')
+    """
+    plans = execute_query(plans_query)
+
+    managers = {}
+    for p in plans:
+        manager_key = p['manager_name'] or 'Unassigned'
+        if manager_key not in managers:
+            managers[manager_key] = {"manager_name": manager_key, "plans": []}
+
+        topic_count_query = "SELECT COUNT(*) as cnt FROM plan_topics WHERE plan_id = %s"
+        topic_count_res = execute_query(topic_count_query, (p['plan_id'],))
+        topic_count = int(topic_count_res[0]['cnt']) if topic_count_res and topic_count_res[0]['cnt'] else 0
+
+        comp_query = """
+            SELECT 
+                (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
+                (SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics
+            FROM DUAL
+        """
+        comp_res = execute_query(comp_query, (p['plan_id'], p['plan_id']))
+        if comp_res and comp_res[0]['total_topics'] and int(comp_res[0]['total_topics']) > 0:
+            plan_completion = min(100.0, round((float(comp_res[0]['completed_topics']) / float(comp_res[0]['total_topics'])) * 100.0, 2))
+        else:
+            plan_completion = 0.0
+
+        managers[manager_key]["plans"].append({
+            "plan_id": p['plan_id'],
+            "application_name": p['application_name'],
+            "status": p['status'],
+            "completion_percent": plan_completion,
+            "topic_count": topic_count
+        })
+
+    result = []
+    for m in managers.values():
+        plans_list = m["plans"]
+        total_weight = sum(pl['topic_count'] for pl in plans_list)
+
+        if total_weight > 0:
+            weighted_sum_comp = sum(pl['completion_percent'] * pl['topic_count'] for pl in plans_list)
+            overall_comp = round(weighted_sum_comp / total_weight, 2)
+        elif plans_list:
+            overall_comp = round(sum(pl['completion_percent'] for pl in plans_list) / len(plans_list), 2)
+        else:
+            overall_comp = 0.0
+
+        result.append({
+            "manager_name": m["manager_name"],
+            "total_plans": len(plans_list),
+            "overall_completion_percent": overall_comp,
+            "plans": plans_list
+        })
+
+    all_plans = [pl for m in result for pl in m['plans']]
+    total_weight_all = sum(pl['topic_count'] for pl in all_plans)
+    
+    if total_weight_all > 0:
+        combined_comp_avg = round(sum(pl['completion_percent'] * pl['topic_count'] for pl in all_plans) / total_weight_all, 2)
+    elif all_plans:
+        combined_comp_avg = round(sum(pl['completion_percent'] for pl in all_plans) / len(all_plans), 2)
+    else:
+        combined_comp_avg = 0.0
+
+    return {
+        "managers": result,
+        "combined_average_completion_percent": combined_comp_avg,
+        "total_managers": len(result)
+    }
+
 def get_manager_wise_risk_summary():
     plans_query = """
         SELECT kp.id as plan_id, kp.application_name, kp.status, s.name as manager_name
