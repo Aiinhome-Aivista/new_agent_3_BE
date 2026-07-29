@@ -12,16 +12,16 @@ knowledge_bp = Blueprint('knowledge_bp', __name__)
 
 @knowledge_bp.route('/upload', methods=['POST'])
 def upload_document():
-    if 'file' not in request.files:
+    files = request.files.getlist('files')
+    if not files and 'file' in request.files:
+        files = [request.files['file']]
+        
+    if not files:
         return jsonify({"success": False, "message": "No file part"}), 400
         
-    file = request.files['file']
     plan_id = request.form.get('plan_id')
     kt_day = request.form.get('kt_day')
     
-    if file.filename == '':
-        return jsonify({"success": False, "message": "No selected file"}), 400
-        
     if not plan_id:
         return jsonify({"success": False, "message": "Missing plan_id"}), 400
         
@@ -30,64 +30,103 @@ def upload_document():
     except ValueError:
         return jsonify({"success": False, "message": "Invalid plan_id"}), 400
         
+    manager_id = -1
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            import jwt
+            from config import Config
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            user_email = payload.get('email')
+            user_role = payload.get('role')
+            user_id = payload.get('sub')
+            
+            user_full_name = None
+            if user_id:
+                users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                if users:
+                    user_full_name = users[0]['full_name']
+            
+            from services.plan_service import resolve_stakeholder_for_user
+            if user_email:
+                manager_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+        except Exception:
+            pass
+
+    import datetime
+    timestamp = datetime.datetime.utcnow().isoformat()
+    results = []
+
     try:
-        filename = file.filename
-        
-        if filename == 'CONFLUENCE_SYNC.txt':
-            from connectors import ConfluenceConnector
-            confluence = ConfluenceConnector()
-            kb_chunks = confluence.fetch_kb_from_confluence()
+        for file in files:
+            if file.filename == '':
+                continue
+                
+            filename = file.filename
             
-            text = "\n".join(kb_chunks)
-            filename = 'confluence_auto_sync'
-            ext = '.txt'
-        else:
-            ext = os.path.splitext(filename)[1].lower()
-            text = ""
-            
-            if ext == '.pdf':
-                import pypdf
-                pdf_reader = pypdf.PdfReader(file)
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
-            elif ext in ['.docx', '.doc', '.docs']:
-                import docx
-                doc = docx.Document(file)
-                for para in doc.paragraphs:
-                    text += para.text + "\n"
-            elif ext in ['.ppt', '.pptx']:
-                from pptx import Presentation
-                prs = Presentation(file)
-                for slide in prs.slides:
-                    for shape in slide.shapes:
-                        if hasattr(shape, "text"):
-                            text += shape.text + "\n"
-            elif ext == '.txt':
-                text = file.read().decode('utf-8', errors='ignore')
+            if filename == 'CONFLUENCE_SYNC.txt':
+                from connectors import ConfluenceConnector
+                confluence = ConfluenceConnector()
+                kb_chunks = confluence.fetch_kb_from_confluence()
+                
+                text = "\n".join(kb_chunks)
+                filename = 'confluence_auto_sync'
             else:
-                return jsonify({"success": False, "message": "Unsupported file type"}), 400
+                ext = os.path.splitext(filename)[1].lower()
+                text = ""
+                
+                if ext == '.pdf':
+                    import pypdf
+                    pdf_reader = pypdf.PdfReader(file)
+                    for page in pdf_reader.pages:
+                        text += page.extract_text() + "\n"
+                elif ext in ['.docx', '.doc', '.docs']:
+                    import docx
+                    doc = docx.Document(file)
+                    for para in doc.paragraphs:
+                        text += para.text + "\n"
+                elif ext in ['.ppt', '.pptx']:
+                    from pptx import Presentation
+                    prs = Presentation(file)
+                    for slide in prs.slides:
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text"):
+                                text += shape.text + "\n"
+                elif ext == '.txt':
+                    text = file.read().decode('utf-8', errors='ignore')
+                else:
+                    continue # Skip unsupported files in multi-upload
+                
+            doc_id = str(uuid.uuid4())
+            metadata = {
+                "plan_id": plan_id,
+                "day": kt_day,
+                "manager_id": manager_id,
+                "file_name": filename,
+                "created_at": timestamp
+            }
             
-        doc_id = str(uuid.uuid4())
-        metadata = {"plan_id": plan_id, "filename": filename, "kt_day": kt_day}
-        
-        chunk_count = add_document(doc_id, text, metadata)
-        
-        query = """
-            INSERT INTO knowledge_documents (plan_id, kt_day, filename, chunk_count)
-            VALUES (%s, %s, %s, %s)
-        """
-        doc_db_id = execute_write(query, (plan_id, kt_day, filename, chunk_count))
-        
-        return jsonify({
-            "success": True, 
-            "data": {
+            chunk_count = add_document(doc_id, text, metadata)
+            
+            query = """
+                INSERT INTO knowledge_documents (plan_id, kt_day, filename, chunk_count)
+                VALUES (%s, %s, %s, %s)
+            """
+            doc_db_id = execute_write(query, (plan_id, kt_day, filename, chunk_count))
+            
+            results.append({
                 "id": doc_db_id,
                 "plan_id": plan_id,
                 "kt_day": kt_day,
                 "filename": filename,
                 "chunk_count": chunk_count
-            },
-            "message": "Document processed and added to knowledge base"
+            })
+            
+        return jsonify({
+            "success": True, 
+            "data": results,
+            "message": f"Processed {len(results)} document(s) successfully"
         }), 201
         
     except Exception as e:
