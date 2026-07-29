@@ -319,6 +319,7 @@ def get_meetings():
         from services.tracking_service import get_meeting_attendance_rate
         
         plan_day_counters = {}
+        plan_kg_cache = {}
         for m in meetings:
             m['attendance_rate_percent'] = get_meeting_attendance_rate(m['id'])
             pid = m['plan_id']
@@ -326,6 +327,48 @@ def get_meetings():
                 plan_day_counters[pid] = 1
             m['day_label'] = f"Day {plan_day_counters[pid]}"
             plan_day_counters[pid] += 1
+            
+            try:
+                kg_query = """
+                    SELECT DISTINCT s.name
+                    FROM stakeholders s
+                    JOIN attendance a ON s.id = a.stakeholder_id
+                    WHERE a.meeting_id = %s 
+                      AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
+                """
+                kg_res = execute_query(kg_query, (m['id'], '%outgoing%', '%Giver%'))
+                giver_names = [r['name'] for r in kg_res] if kg_res else []
+                
+                if not giver_names:
+                    if pid not in plan_kg_cache:
+                        plan_kg_query = """
+                            SELECT DISTINCT s.name
+                            FROM stakeholders s
+                            JOIN attendance a ON s.id = a.stakeholder_id
+                            JOIN meetings m2 ON a.meeting_id = m2.id
+                            WHERE m2.plan_id = %s 
+                              AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
+                        """
+                        plan_kg_res = execute_query(plan_kg_query, (pid, '%outgoing%', '%Giver%'))
+                        plan_kg_cache[pid] = [r['name'] for r in plan_kg_res] if plan_kg_res else []
+                    giver_names = plan_kg_cache[pid]
+                    
+                if not giver_names:
+                    global_kg = execute_query("SELECT name FROM stakeholders WHERE role = 'Outgoing SME (Knowledge Giver)' OR role = 'outgoing_sme' OR role LIKE %s OR role LIKE %s LIMIT 1", ('%outgoing%', '%Giver%'))
+                    giver_names = [r['name'] for r in global_kg] if global_kg else []
+                    
+                seen = set()
+                unique_giver_names = []
+                for name in giver_names:
+                    if name not in seen:
+                        seen.add(name)
+                        unique_giver_names.append(name)
+                m['knowledge_giver_names'] = ", ".join(unique_giver_names) if unique_giver_names else "N/A"
+                m['knowledge_givers'] = unique_giver_names
+            except Exception as kg_err:
+                print(f"Error fetching knowledge givers for meeting {m['id']}: {kg_err}")
+                m['knowledge_giver_names'] = "N/A"
+                m['knowledge_givers'] = []
             
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:

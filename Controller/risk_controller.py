@@ -1,7 +1,8 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from db import execute_query, execute_write
 from llm_service import call_llm
 import json
+import os
 
 risk_bp = Blueprint('risk_bp', __name__)
 
@@ -20,6 +21,18 @@ def detect_risks():
             return jsonify({"success": True, "data": [], "message": "No risks detected or analysis could not be parsed — please try again"}), 200
         return jsonify({"success": True, "data": saved_risks, "message": "Risks detected and logged"}), 200
         
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@risk_bp.route('/export-doc', methods=['GET'])
+def export_risks_doc():
+    plan_id = request.args.get('plan_id')
+    if not plan_id:
+        return jsonify({"success": False, "message": "Missing plan_id parameter"}), 400
+    try:
+        from services.risk_service import generate_risks_word_doc
+        result = generate_risks_word_doc(plan_id)
+        return send_file(result['filepath'], as_attachment=True)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

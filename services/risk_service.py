@@ -1,6 +1,15 @@
 from db import execute_query, execute_write
 from llm_service import call_llm
 import json
+import os
+from datetime import datetime
+try:
+    from docx import Document
+except ImportError:
+    Document = None
+
+REPORTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'reports_output')
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
 def detect_risks_service(plan_id):
     # Gather data for LLM
@@ -201,4 +210,116 @@ def update_risk_status_service(risk_id, status):
     query = "UPDATE risks SET status = %s WHERE id = %s"
     execute_write(query, (status, risk_id))
     return True
+
+def sort_risks_ui_order(risks):
+    def get_risk_day(r):
+        val = r.get('created_at') or r.get('date')
+        if isinstance(val, datetime):
+            return val.date()
+        elif hasattr(val, 'date') and callable(val.date):
+            return val.date()
+        elif isinstance(val, str):
+            try:
+                return datetime.fromisoformat(str(val).replace('Z', '')).date()
+            except Exception:
+                return datetime.min.date()
+        return datetime.min.date()
+
+    def get_severity_rank(r):
+        sev = str(r.get('severity', '')).lower()
+        mapping = {'critical': 1, 'high': 2, 'medium': 3, 'low': 4}
+        return mapping.get(sev, 5)
+
+    return sorted(risks, key=lambda r: (
+        1 if str(r.get('status', '')).lower() in ['solved', 'resolved', 'approved'] else 0,
+        -get_risk_day(r).toordinal(),
+        get_severity_rank(r)
+    ))
+
+def generate_risks_word_doc(plan_id):
+    if not Document:
+        raise Exception("python-docx is not installed")
+        
+    plan_query = "SELECT application_name, scope_description FROM kt_plans WHERE id = %s"
+    plan_res = execute_query(plan_query, (plan_id,))
+    plan_name = plan_res[0]['application_name'] if plan_res else f"Plan {plan_id}"
+    scope_desc = plan_res[0]['scope_description'] if plan_res and 'scope_description' in plan_res[0] else ""
+    
+    query = "SELECT * FROM risks WHERE plan_id = %s"
+    risks = execute_query(query, (plan_id,))
+    risks = sort_risks_ui_order(risks)
+    
+    doc = Document()
+    doc.add_heading(f"Risk Log & Details: {plan_name}", level=0)
+    
+    p_meta = doc.add_paragraph()
+    p_meta.add_run("Plan ID: ").bold = True
+    p_meta.add_run(f"{plan_id}    |    ")
+    p_meta.add_run("Total Risks Logged: ").bold = True
+    p_meta.add_run(f"{len(risks)}    |    ")
+    p_meta.add_run("Generated At: ").bold = True
+    p_meta.add_run(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    if scope_desc:
+        p_scope = doc.add_paragraph()
+        p_scope.add_run("Scope / Description: ").bold = True
+        p_scope.add_run(str(scope_desc))
+        
+    if not risks:
+        doc.add_paragraph("No risks have been logged for this plan yet.")
+    else:
+        for idx, r in enumerate(risks, 1):
+            title = r.get('description', 'Untitled Risk')
+            short_title = title[:80] + "..." if len(title) > 80 else title
+            doc.add_heading(f"{idx}. {short_title} (ID #{r['id']})", level=1)
+            
+            assignees_query = """
+                SELECT s.name 
+                FROM risk_assignments ra
+                JOIN stakeholders s ON ra.stakeholder_id = s.id
+                WHERE ra.risk_id = %s
+            """
+            assignees = execute_query(assignees_query, (r['id'],))
+            assigned_names = [a['name'] for a in assignees] if assignees else []
+            
+            comments_query = """
+                SELECT rc.comment_text, rc.created_at, s.name as stakeholder_name, s.role 
+                FROM risk_comments rc
+                JOIN stakeholders s ON rc.stakeholder_id = s.id
+                WHERE rc.risk_id = %s
+                ORDER BY rc.created_at ASC
+            """
+            comments = execute_query(comments_query, (r['id'],))
+            
+            def add_field_line(doc_obj, label, value):
+                p = doc_obj.add_paragraph()
+                p.paragraph_format.space_after = 2
+                p.add_run(f"{label}: ").bold = True
+                p.add_run(str(value))
+                
+            add_field_line(doc, "Risk ID", f"#{r['id']}")
+            add_field_line(doc, "Full Description", r.get('description', 'N/A'))
+            add_field_line(doc, "Severity", str(r.get('severity', '')).upper())
+            add_field_line(doc, "Status", str(r.get('status', '')).upper())
+            add_field_line(doc, "Detected By", str(r.get('detected_by', 'AI')).upper())
+            add_field_line(doc, "Created At", str(r.get('created_at', 'N/A')))
+            add_field_line(doc, "Assigned Stakeholders", ", ".join(assigned_names) if assigned_names else "Unassigned")
+            
+            doc.add_heading("Comments & Action History", level=2)
+            if comments:
+                for c in comments:
+                    p_c = doc.add_paragraph(style='List Bullet')
+                    author = c.get('stakeholder_name', 'Unknown')
+                    role = c.get('role', '')
+                    timestamp = str(c.get('created_at', ''))
+                    p_c.add_run(f"[{timestamp}] {author} ({role}): ").bold = True
+                    p_c.add_run(str(c.get('comment_text', '')))
+            else:
+                doc.add_paragraph("No comments or status updates recorded.")
+                
+    safe_plan_name = "".join([c if c.isalnum() else "_" for c in plan_name])
+    filename = f"Risks_{safe_plan_name}_{plan_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    filepath = os.path.join(REPORTS_DIR, filename)
+    doc.save(filepath)
+    return {"filename": filename, "filepath": filepath}
 
