@@ -63,16 +63,22 @@ def generate_questions():
 
         topics_str = "\n\n".join(target_topics)
         
-        # Check if any knowledge documents are uploaded for this plan / day
+        from rag_service import query_knowledge, extract_day_key
+
+        # Check if any knowledge documents are uploaded for this plan / day in DB
         if assessment_type == 'day_wise' and day_label:
-            doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s AND (kt_day = %s OR kt_day IS NULL) LIMIT 1"
-            docs_exist = execute_query(doc_query, (plan_id, day_label))
-            if not docs_exist:
-                doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
-                docs_exist = execute_query(doc_query, (plan_id,))
+            target_key = extract_day_key(day_label)
+            all_docs = execute_query("SELECT id, kt_day FROM knowledge_documents WHERE plan_id = %s", (plan_id,))
+            docs_exist = False
+            if all_docs:
+                for d in all_docs:
+                    doc_day_key = extract_day_key(d.get('kt_day', ''))
+                    if target_key and doc_day_key and (target_key == doc_day_key or target_key in doc_day_key or doc_day_key in target_key):
+                        docs_exist = True
+                        break
         else:
             doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
-            docs_exist = execute_query(doc_query, (plan_id,))
+            docs_exist = bool(execute_query(doc_query, (plan_id,)))
         
         if not docs_exist:
             return jsonify({
@@ -80,13 +86,15 @@ def generate_questions():
                 "message": "Documents are not uploaded."
             }), 400
 
-        from rag_service import query_knowledge
         context_texts = []
         target_day_filter = day_label if assessment_type == 'day_wise' else None
+        
         for topic in target_topics[:5]:
             results = query_knowledge(topic, plan_id=plan_id, kt_day=target_day_filter, n_results=3)
             for r in results:
-                context_texts.append(r['text'])
+                if r['text'] not in context_texts:
+                    context_texts.append(r['text'])
+
         context_str = "\n---\n".join(context_texts) if context_texts else ""
 
         if not context_str.strip():
