@@ -101,15 +101,19 @@ def get_plans():
             except Exception:
                 pass
 
-        if for_dropdown and user_role == 'Delivery / Engagement Manager':
+        if user_role == 'Delivery / Engagement Manager':
             from services.plan_service import resolve_stakeholder_for_user
             stakeholder_id = None
             if user_email:
                 stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
             
             if stakeholder_id:
-                query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status = 'approved' ORDER BY created_at DESC"
-                plans = execute_query(query, (stakeholder_id,))
+                if for_dropdown:
+                    query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status = 'approved' ORDER BY created_at DESC"
+                    plans = execute_query(query, (stakeholder_id,))
+                else:
+                    query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s ORDER BY created_at DESC"
+                    plans = execute_query(query, (stakeholder_id, stakeholder_id))
             else:
                 plans = []
         else:
