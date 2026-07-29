@@ -308,20 +308,33 @@ def complete_assessment():
         overall_feedback = call_llm(prompt)
         overall_feedback = overall_feedback.strip()
         
-        # Capture completed topics snapshot at completion time
-        passed_topics = data.get('covered_topics')
-        if passed_topics is not None:
-            covered_topics_json = json.dumps(passed_topics) if isinstance(passed_topics, list) else passed_topics
-        else:
-            completed_topics_res = execute_query(
-                "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
-                (plan_id,)
-            )
-            covered_topics_list = [row['topic'] for row in completed_topics_res] if completed_topics_res else []
-            covered_topics_json = json.dumps(covered_topics_list)
-
         assessment_type = data.get('assessment_type', 'final')
         day_label = data.get('day_label')
+
+        # Capture completed topics snapshot at completion time for specific assessment_type / day_label
+        passed_topics = data.get('covered_topics')
+        if passed_topics is not None and (not isinstance(passed_topics, list) or len(passed_topics) > 0):
+            covered_topics_json = json.dumps(passed_topics) if isinstance(passed_topics, list) else passed_topics
+        else:
+            if assessment_type == 'day_wise' and day_label:
+                from rag_service import extract_day_key
+                target_key = extract_day_key(day_label)
+                all_plan_topics = execute_query("SELECT topic_name, day_label FROM plan_topics WHERE plan_id = %s", (plan_id,))
+                covered_topics_list = []
+                if all_plan_topics:
+                    for pt in all_plan_topics:
+                        d_key = extract_day_key(pt.get('day_label', ''))
+                        if target_key and d_key and (target_key == d_key or target_key in d_key or d_key in target_key):
+                            covered_topics_list.append(pt['topic_name'])
+                if not covered_topics_list:
+                    covered_topics_list = [day_label]
+            else:
+                completed_topics_res = execute_query(
+                    "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
+                    (plan_id,)
+                )
+                covered_topics_list = [row['topic'] for row in completed_topics_res] if completed_topics_res else []
+            covered_topics_json = json.dumps(covered_topics_list)
 
         # Save parent summary row into assessment_results (try with assessment_type & day_label, fallback if columns not present yet)
         try:
