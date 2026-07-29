@@ -79,8 +79,43 @@ def extract_plan_info_from_doc():
 @planning_bp.route('/', methods=['GET'])
 def get_plans():
     try:
-        query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
-        plans = execute_query(query)
+        for_dropdown = request.args.get('for_dropdown') == 'true'
+        user_email = None
+        user_full_name = None
+        user_role = None
+        
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                import jwt
+                from config import Config
+                payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+                user_email = payload.get('email')
+                user_role = payload.get('role')
+                user_id = payload.get('sub')
+                if user_id:
+                    users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                    if users:
+                        user_full_name = users[0]['full_name']
+            except Exception:
+                pass
+
+        if for_dropdown and user_role == 'Delivery / Engagement Manager':
+            from services.plan_service import resolve_stakeholder_for_user
+            stakeholder_id = None
+            if user_email:
+                stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            
+            if stakeholder_id:
+                query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status = 'approved' ORDER BY created_at DESC"
+                plans = execute_query(query, (stakeholder_id,))
+            else:
+                plans = []
+        else:
+            query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
+            plans = execute_query(query)
+
         return jsonify({"success": True, "data": plans}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
