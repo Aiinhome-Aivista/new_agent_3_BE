@@ -110,3 +110,14 @@ def view_report(id):
         return jsonify({"success": True, "data": {"content": structured_content, "filename": filename}}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@reporting_bp.route('/<int:id>/status', methods=['PUT', 'PATCH'])
+def update_report_status(id):
+    data = request.json or {}
+    new_status = data.get('status', 'approved')
+    try:
+        query = "UPDATE reports SET status = %s WHERE id = %s"
+        execute_write(query, (new_status, id))
+        return jsonify({"success": True, "message": f"Report status updated to {new_status}"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
