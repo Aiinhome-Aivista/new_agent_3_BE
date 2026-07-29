@@ -63,9 +63,16 @@ def generate_questions():
 
         topics_str = "\n\n".join(target_topics)
         
-        # Check if any knowledge documents are uploaded for this plan
-        doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
-        docs_exist = execute_query(doc_query, (plan_id,))
+        # Check if any knowledge documents are uploaded for this plan / day
+        if assessment_type == 'day_wise' and day_label:
+            doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s AND (kt_day = %s OR kt_day IS NULL) LIMIT 1"
+            docs_exist = execute_query(doc_query, (plan_id, day_label))
+            if not docs_exist:
+                doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
+                docs_exist = execute_query(doc_query, (plan_id,))
+        else:
+            doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
+            docs_exist = execute_query(doc_query, (plan_id,))
         
         if not docs_exist:
             return jsonify({
@@ -75,8 +82,9 @@ def generate_questions():
 
         from rag_service import query_knowledge
         context_texts = []
+        target_day_filter = day_label if assessment_type == 'day_wise' else None
         for topic in target_topics[:5]:
-            results = query_knowledge(topic, plan_id=plan_id, n_results=3)
+            results = query_knowledge(topic, plan_id=plan_id, kt_day=target_day_filter, n_results=3)
             for r in results:
                 context_texts.append(r['text'])
         context_str = "\n---\n".join(context_texts) if context_texts else ""

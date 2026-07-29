@@ -32,19 +32,38 @@ def add_document(doc_id: str, text: str, metadata: dict) -> int:
     
     return len(chunks)
 
-def query_knowledge(query_text: str, plan_id: int = None, n_results: int = 5) -> list[dict]:
+def query_knowledge(query_text: str, plan_id: int = None, kt_day: str = None, n_results: int = 5) -> list[dict]:
     kwargs = {
         "query_texts": [query_text],
         "n_results": n_results
     }
     
+    where_clauses = []
     if plan_id is not None:
         try:
-            kwargs["where"] = {"plan_id": int(plan_id)}
+            where_clauses.append({"plan_id": int(plan_id)})
         except (ValueError, TypeError):
-            kwargs["where"] = {"plan_id": plan_id}
+            where_clauses.append({"plan_id": plan_id})
+            
+    if kt_day:
+        where_clauses.append({"kt_day": str(kt_day)})
+
+    if len(where_clauses) == 1:
+        kwargs["where"] = where_clauses[0]
+    elif len(where_clauses) > 1:
+        kwargs["where"] = {"$and": where_clauses}
         
-    results = collection.query(**kwargs)
+    try:
+        results = collection.query(**kwargs)
+    except Exception:
+        if plan_id is not None:
+            try:
+                kwargs["where"] = {"plan_id": int(plan_id)}
+            except Exception:
+                kwargs["where"] = {"plan_id": plan_id}
+            results = collection.query(**kwargs)
+        else:
+            return []
     
     formatted_results = []
     if results and results.get("documents") and len(results["documents"]) > 0:
