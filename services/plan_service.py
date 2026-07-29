@@ -13,12 +13,16 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
     # Map the users.role value to the stakeholders.role ENUM
     role_map = {
         'leadership': 'leadership',
+        'PwC Leadership': 'PwC Leadership',
         'engagement_manager': 'engagement_manager',
+        'Delivery / Engagement Manager': 'Delivery / Engagement Manager',
         'manager': 'engagement_manager',
         'outgoing_sme': 'outgoing_sme',
+        'Outgoing SME (Knowledge Giver)': 'Outgoing SME (Knowledge Giver)',
         'incoming_member': 'incoming_member',
+        'Incoming Team Member (Knowledge Receiver)': 'Incoming Team Member (Knowledge Receiver)',
     }
-    mapped_role = role_map.get(user_role, 'engagement_manager')
+    mapped_role = role_map.get(user_role, user_role)
 
     new_id = execute_write(
         "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)",

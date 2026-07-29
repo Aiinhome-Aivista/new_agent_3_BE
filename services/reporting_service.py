@@ -119,30 +119,25 @@ def generate_final_service(plan_id):
     manager_res = execute_query(manager_query, (plan_id,))
     manager_name = manager_res[0]['name'] if manager_res else "[Manager Name Not Assigned]"
     
-    giver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND s.role = 'outgoing_sme'"
+    giver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE '%outgoing%' OR s.role LIKE '%Giver%')"
     giver_res = execute_query(giver_query, (plan_id,))
     giver_names = ", ".join([r['name'] for r in giver_res]) if giver_res else ""
     
     if not giver_names:
-        org_query = "SELECT DISTINCT u.full_name FROM users u JOIN meetings m ON m.organizer_id = u.id WHERE m.plan_id = %s"
-        org_res = execute_query(org_query, (plan_id,))
-        giver_names = ", ".join([r['full_name'] for r in org_res]) if org_res else ""
-        
-    if not giver_names:
-        global_giver = execute_query("SELECT name FROM stakeholders WHERE role = 'outgoing_sme' LIMIT 1")
+        global_giver = execute_query("SELECT name FROM stakeholders WHERE role = 'Outgoing SME (Knowledge Giver)' OR role = 'outgoing_sme' OR role LIKE '%outgoing%' OR role LIKE '%Giver%' LIMIT 1")
         giver_names = global_giver[0]['name'] if global_giver else "[Knowledge Giver]"
     
-    receiver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'incoming_member' OR s.role LIKE '%incoming%')"
+    receiver_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN attendance a ON a.stakeholder_id = s.id JOIN meetings m ON a.meeting_id = m.id WHERE m.plan_id = %s AND (s.role = 'Incoming Team Member (Knowledge Receiver)' OR s.role = 'incoming_member' OR s.role LIKE '%incoming%' OR s.role LIKE '%Receiver%')"
     receiver_res = execute_query(receiver_query, (plan_id,))
     receiver_names = ", ".join([r['name'] for r in receiver_res]) if receiver_res else ""
     
     if not receiver_names:
-        assess_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN assessments a ON a.stakeholder_id = s.id WHERE a.plan_id = %s AND (s.role = 'incoming_member' OR s.role LIKE '%incoming%')"
+        assess_query = "SELECT DISTINCT s.name FROM stakeholders s JOIN assessments a ON a.stakeholder_id = s.id WHERE a.plan_id = %s AND (s.role = 'Incoming Team Member (Knowledge Receiver)' OR s.role = 'incoming_member' OR s.role LIKE '%incoming%' OR s.role LIKE '%Receiver%')"
         assess_res = execute_query(assess_query, (plan_id,))
         receiver_names = ", ".join([r['name'] for r in assess_res]) if assess_res else ""
         
     if not receiver_names:
-        global_receiver = execute_query("SELECT name FROM stakeholders WHERE role = 'incoming_member' OR role LIKE '%incoming%' LIMIT 1")
+        global_receiver = execute_query("SELECT name FROM stakeholders WHERE role = 'Incoming Team Member (Knowledge Receiver)' OR role = 'incoming_member' OR role LIKE '%incoming%' OR role LIKE '%Receiver%' LIMIT 1")
         receiver_names = global_receiver[0]['name'] if global_receiver else "[Knowledge Receiver]"
 
     prompt = f"""
