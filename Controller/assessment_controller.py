@@ -13,69 +13,121 @@ def generate_questions():
         return jsonify({"success": False, "message": "Missing plan_id"}), 400
         
     plan_id = data['plan_id']
+    assessment_type = data.get('assessment_type', 'final')
+    day_label = data.get('day_label')
+
     try:
-        # Fetch completed topics for the selected plan
-        query = "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100"
-        completed_topics_res = execute_query(query, (plan_id,))
-        
-        if not completed_topics_res:
-            return jsonify({
-                "success": False,
-                "message": "No completed topics available for assessment."
-            }), 400
-            
-        completed_topics_list = [row['topic'] for row in completed_topics_res]
-        topics_str = "\n\n".join(completed_topics_list)
+        if assessment_type == 'day_wise' and day_label:
+            # Day-wise Assessment (Optional): fetch topics specific to this day_label
+            day_topics_res = execute_query(
+                "SELECT topic_name FROM plan_topics WHERE plan_id = %s AND day_label = %s",
+                (plan_id, day_label)
+            )
+            if day_topics_res:
+                target_topics = [row['topic_name'] for row in day_topics_res]
+            else:
+                target_topics = [day_label]
+        else:
+            # Final Assessment (Mandatory) or default: fetch all completed topics
+            completed_topics_res = execute_query(
+                "SELECT topic, last_updated FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
+                (plan_id,)
+            )
+            if not completed_topics_res:
+                # Fallback to all plan topics if completion tracking isn't populated yet
+                all_topics = execute_query("SELECT topic_name FROM plan_topics WHERE plan_id = %s", (plan_id,))
+                if all_topics:
+                    target_topics = [row['topic_name'] for row in all_topics]
+                else:
+                    return jsonify({
+                        "success": False,
+                        "message": "No topics available for assessment."
+                    }), 400
+            else:
+                target_topics = [row['topic'] for row in completed_topics_res]
+                # Enforce 1-week (7 days) deadline from plan completion date for Final Assessment
+                from datetime import datetime, timedelta
+                timestamps = [row['last_updated'] for row in completed_topics_res if row.get('last_updated')]
+                if timestamps:
+                    latest_completed = max(timestamps)
+                    if isinstance(latest_completed, str):
+                        try:
+                            latest_completed = datetime.fromisoformat(latest_completed.replace('Z', ''))
+                        except Exception:
+                            latest_completed = None
+                    if latest_completed and datetime.now() > (latest_completed + timedelta(days=7)):
+                        return jsonify({
+                            "success": False,
+                            "message": "Final Assessment deadline has expired. It must be taken within 1 week of plan completion."
+                        }), 400
+
+        topics_str = "\n\n".join(target_topics)
         
         # Check if any knowledge documents are uploaded for this plan
         doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
         docs_exist = execute_query(doc_query, (plan_id,))
         
-        if docs_exist:
-            from rag_service import query_knowledge
-            # Query the RAG service for context based on the completed topics
-            context_texts = []
-            for topic in completed_topics_list:
-                results = query_knowledge(topic, plan_id=plan_id, n_results=3)
-                for r in results:
-                    context_texts.append(r['text'])
-            
-            context_str = "\n---\n".join(context_texts)
-            
-            prompt = f"""
-            Completed Topics:
-            {topics_str}
-            
-            Knowledge Base Context:
-            {context_str}
-            
-            Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
-            
-            IMPORTANT:
-            - You MUST generate questions STRICTLY based on the provided Knowledge Base Context.
-            - The questions must also relate to the Completed Topics.
-            - Do NOT generate questions using outside knowledge or generally. ONLY use the provided Context.
-            - Return ONLY a JSON array of strings, where each string is a question.
-            """
-        else:
-            prompt = f"""
-            Completed Topics
-            
-            {topics_str}
-            
-            Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
-            
-            IMPORTANT
-            
-            Generate questions ONLY from the completed KT topics above.
-            
-            Do NOT generate questions from unfinished topics.
-            
-            Do NOT assume any missing knowledge.
-            
-            Return ONLY a JSON array of strings, where each string is a question.
-            """
+        if not docs_exist:
+            return jsonify({
+                "success": False,
+                "message": "Documents are not uploaded."
+            }), 400
+
+        from rag_service import query_knowledge
+        context_texts = []
+        for topic in target_topics[:5]:
+            results = query_knowledge(topic, plan_id=plan_id, n_results=3)
+            for r in results:
+                context_texts.append(r['text'])
+        context_str = "\n---\n".join(context_texts) if context_texts else ""
+
+        if not context_str.strip():
+            return jsonify({
+                "success": False,
+                "message": "Documents are not uploaded."
+            }), 400
+
+        mode_desc = f"Day-wise Assessment (Optional) for '{day_label}'" if assessment_type == 'day_wise' and day_label else "Final Comprehensive Assessment (Mandatory)"
+
+        prompt = f"""
+        Assessment Mode: {mode_desc}
+
+        Target Topics:
+        {topics_str}
         
+        Knowledge Base Context:
+        {context_str}
+        
+        Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
+        
+        IMPORTANT:
+        - You MUST generate questions STRICTLY based on the provided Knowledge Base Context.
+        - The questions must also relate to the Target Topics above.
+        - Do NOT generate questions using outside knowledge or generally. ONLY use the provided Context.
+        - Return ONLY a JSON array of strings, where each string is a question.
+        """
+
+        # =========================================================================
+        # COMMENTED OUT (Per User Requirement):
+        # Previous feature that generated questions manually from LLM when no documents were uploaded.
+        # Required Behavior: If no documents are uploaded, return "Documents are not uploaded."
+        # =========================================================================
+        # else:
+        #     prompt = f"""
+        #     Assessment Mode: {mode_desc}
+        #
+        #     Target Topics:
+        #     {topics_str}
+        #     
+        #     Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
+        #     
+        #     IMPORTANT:
+        #     - Generate questions ONLY from the target topics above.
+        #     - Do NOT generate questions from unfinished or unrelated topics.
+        #     - Do NOT assume any missing knowledge.
+        #     - Return ONLY a JSON array of strings, where each string is a question.
+        #     """
+
         llm_response = call_llm(prompt)
         
         try:
@@ -83,11 +135,11 @@ def generate_questions():
             questions = json.loads(clean_json)
         except json.JSONDecodeError:
             questions = [
-                "What are the main objectives of this KT?",
-                "Can you describe the primary architecture components?",
-                "What are the known risks in this domain?",
-                "How do you handle deployment for this application?",
-                "Who are the key points of contact?"
+                f"What are the main objectives covered in {day_label if day_label else 'this KT plan'}?",
+                "Can you describe the primary architecture components discussed?",
+                "What are the key technical concepts and workflows?",
+                "How do you handle error cases or edge scenarios for these topics?",
+                "Who are the key points of contact and resources for this domain?"
             ]
             
         return jsonify({"success": True, "data": questions}), 200
@@ -252,12 +304,22 @@ def complete_assessment():
             covered_topics_list = [row['topic'] for row in completed_topics_res] if completed_topics_res else []
             covered_topics_json = json.dumps(covered_topics_list)
 
-        # Save parent summary row into assessment_results
-        insert_query = """
-            INSERT INTO assessment_results (asid, plan_id, stakeholder_id, overall_score, feedback, covered_topics)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        execute_write(insert_query, (asid, plan_id, stakeholder_id, overall_score, overall_feedback, covered_topics_json))
+        assessment_type = data.get('assessment_type', 'final')
+        day_label = data.get('day_label')
+
+        # Save parent summary row into assessment_results (try with assessment_type & day_label, fallback if columns not present yet)
+        try:
+            insert_query = """
+                INSERT INTO assessment_results (asid, plan_id, stakeholder_id, assessment_type, day_label, overall_score, feedback, covered_topics)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            execute_write(insert_query, (asid, plan_id, stakeholder_id, assessment_type, day_label, overall_score, overall_feedback, covered_topics_json))
+        except Exception:
+            insert_query = """
+                INSERT INTO assessment_results (asid, plan_id, stakeholder_id, overall_score, feedback, covered_topics)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            execute_write(insert_query, (asid, plan_id, stakeholder_id, overall_score, overall_feedback, covered_topics_json))
         
         # Fetch the new assessment_results.id to back-fill assessments.asmt_id
         id_query = "SELECT id FROM assessment_results WHERE asid = %s"

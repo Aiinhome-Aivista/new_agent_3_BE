@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS assessment_results (
     asid VARCHAR(255) UNIQUE,
     plan_id INT NOT NULL,
     stakeholder_id INT NOT NULL,
+    assessment_type VARCHAR(50) DEFAULT 'final',
+    day_label VARCHAR(255) NULL,
     overall_score FLOAT NOT NULL,
     feedback TEXT,
     covered_topics JSON NULL,
