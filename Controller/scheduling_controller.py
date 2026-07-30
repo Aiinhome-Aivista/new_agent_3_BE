@@ -381,6 +381,19 @@ def update_meeting_status(id):
         return jsonify({"success": False, "message": "Missing status field"}), 400
         
     try:
+        if data.get('status') == 'completed':
+            try:
+                user_info = get_authenticated_user()
+                user_id = user_info['sub']
+                users = execute_query("SELECT role FROM users WHERE id = %s", (user_id,))
+                if users and users[0]['role'] == 'Delivery / Engagement Manager':
+                    from services.tracking_service import get_meeting_attendance_rate
+                    rate = get_meeting_attendance_rate(id)
+                    if rate == 0.0:
+                        return jsonify({"success": False, "message": "Give attendance at first then only the meeting can be marked completed."}), 400
+            except Exception as auth_check_err:
+                print(f"DEBUG: auth check error in update_meeting_status: {auth_check_err}")
+                pass
         query = "UPDATE meetings SET status = %s WHERE id = %s"
         execute_write(query, (data['status'], id))
         return jsonify({"success": True, "message": "Meeting status updated"}), 200
