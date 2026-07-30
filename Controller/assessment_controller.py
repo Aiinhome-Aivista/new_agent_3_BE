@@ -52,38 +52,55 @@ def generate_questions():
             else:
                 target_topics = [day_label]
         else:
-            # Final Assessment (Mandatory) or default: fetch all completed topics
+            # Final Assessment (Mandatory) or default: fetch plan assessment settings for manager overrides
+            plan_settings_res = execute_query(
+                "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s",
+                (plan_id,)
+            )
+            is_unlocked = False
+            deadline_days = 90
+            if plan_settings_res:
+                is_unlocked = bool(plan_settings_res[0].get('is_final_unlocked'))
+                days_val = plan_settings_res[0].get('final_deadline_extension_days')
+                if days_val is not None:
+                    try:
+                        deadline_days = int(days_val)
+                    except (ValueError, TypeError):
+                        deadline_days = 90
+
             completed_topics_res = execute_query(
                 "SELECT topic, last_updated FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
                 (plan_id,)
             )
             if not completed_topics_res:
-                # Fallback to all plan topics if completion tracking isn't populated yet
-                all_topics = execute_query("SELECT topic_name FROM plan_topics WHERE plan_id = %s", (plan_id,))
-                if all_topics:
-                    target_topics = [row['topic_name'] for row in all_topics]
+                # If no topics 100% completed yet, check partial completion (> 0%)
+                partial_topics = execute_query(
+                    "SELECT topic, last_updated FROM completion_tracking WHERE plan_id = %s AND completion_percent > 0",
+                    (plan_id,)
+                )
+                if partial_topics:
+                    completed_topics_res = partial_topics
                 else:
                     return jsonify({
                         "success": False,
-                        "message": "No topics available for assessment."
+                        "message": "No completed KT topics are available for assessment yet for this plan."
                     }), 400
-            else:
-                target_topics = [row['topic'] for row in completed_topics_res]
-                # Enforce 1-week (7 days) deadline from plan completion date for Final Assessment
-                from datetime import datetime, timedelta
-                timestamps = [row['last_updated'] for row in completed_topics_res if row.get('last_updated')]
-                if timestamps:
-                    latest_completed = max(timestamps)
-                    if isinstance(latest_completed, str):
-                        try:
-                            latest_completed = datetime.fromisoformat(latest_completed.replace('Z', ''))
-                        except Exception:
-                            latest_completed = None
-                    if latest_completed and datetime.now() > (latest_completed + timedelta(days=7)):
-                        return jsonify({
-                            "success": False,
-                            "message": "Final Assessment deadline has expired. It must be taken within 1 week of plan completion."
-                        }), 400
+
+            target_topics = [row['topic'] for row in completed_topics_res]
+            from datetime import datetime, timedelta
+            timestamps = [row['last_updated'] for row in completed_topics_res if row.get('last_updated')]
+            if timestamps and not is_unlocked:
+                latest_completed = max(timestamps)
+                if isinstance(latest_completed, str):
+                    try:
+                        latest_completed = datetime.fromisoformat(latest_completed.replace('Z', ''))
+                    except Exception:
+                        latest_completed = None
+                if latest_completed and datetime.now() > (latest_completed + timedelta(days=deadline_days)):
+                    return jsonify({
+                        "success": False,
+                        "message": f"Final Assessment deadline has expired. It must be taken within {deadline_days} days of plan completion."
+                    }), 400
 
         topics_str = "\n\n".join(target_topics)
         
@@ -438,3 +455,58 @@ def get_attempt_details(asid):
         }), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@assessment_bp.route('/plan/<int:plan_id>/settings', methods=['GET'])
+def get_plan_assessment_settings(plan_id):
+    try:
+        query = "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
+        res = execute_query(query, (plan_id,))
+        if not res:
+            return jsonify({"success": False, "message": "Plan not found"}), 404
+        
+        row = res[0]
+        is_unlocked = bool(row.get('is_final_unlocked', False))
+        days = row.get('final_deadline_extension_days')
+        if days is None:
+            days = 90
+            
+        return jsonify({
+            "success": True,
+            "data": {
+                "is_final_unlocked": is_unlocked,
+                "final_deadline_extension_days": int(days)
+            }
+        }), 200
+    except Exception:
+        return jsonify({
+            "success": True,
+            "data": {
+                "is_final_unlocked": False,
+                "final_deadline_extension_days": 90
+            }
+        }), 200
+
+@assessment_bp.route('/plan/<int:plan_id>/settings', methods=['PUT'])
+def update_plan_assessment_settings(plan_id):
+    data = request.json or {}
+    try:
+        is_unlocked = 1 if data.get('is_final_unlocked') else 0
+        days = int(data.get('final_deadline_extension_days', 90))
+        
+        query = """
+            UPDATE kt_plans 
+            SET is_final_unlocked = %s, final_deadline_extension_days = %s
+            WHERE id = %s
+        """
+        execute_write(query, (is_unlocked, days, plan_id))
+        return jsonify({
+            "success": True,
+            "message": "Manager assessment settings updated successfully.",
+            "data": {
+                "is_final_unlocked": bool(is_unlocked),
+                "final_deadline_extension_days": days
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
