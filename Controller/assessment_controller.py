@@ -15,8 +15,32 @@ def generate_questions():
     plan_id = data['plan_id']
     assessment_type = data.get('assessment_type', 'final')
     day_label = data.get('day_label')
+    stakeholder_id = data.get('stakeholder_id')
 
     try:
+        # Check if assessment has already been completed by this stakeholder
+        if stakeholder_id:
+            if assessment_type == 'day_wise' and day_label:
+                existing = execute_query(
+                    "SELECT id FROM assessment_results WHERE plan_id = %s AND stakeholder_id = %s AND (day_label = %s OR (assessment_type = 'day_wise' AND day_label = %s))",
+                    (plan_id, stakeholder_id, day_label, day_label)
+                )
+                if existing:
+                    return jsonify({
+                        "success": False,
+                        "message": f"Assessment for '{day_label}' has already been completed."
+                    }), 400
+            elif assessment_type == 'final':
+                existing_final = execute_query(
+                    "SELECT id FROM assessment_results WHERE plan_id = %s AND stakeholder_id = %s AND assessment_type = 'final'",
+                    (plan_id, stakeholder_id)
+                )
+                if existing_final:
+                    return jsonify({
+                        "success": False,
+                        "message": "Final Assessment for this plan has already been completed."
+                    }), 400
+
         if assessment_type == 'day_wise' and day_label:
             # Day-wise Assessment (Optional): fetch topics specific to this day_label
             day_topics_res = execute_query(
