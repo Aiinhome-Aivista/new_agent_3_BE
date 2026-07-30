@@ -403,15 +403,45 @@ def update_meeting_status(id):
 @scheduling_bp.route('/meetings/<int:id>/notify', methods=['POST'])
 def notify_meeting(id):
     try:
-        query = "SELECT title, scheduled_at FROM meetings WHERE id = %s"
+        query = "SELECT title, scheduled_at, status FROM meetings WHERE id = %s"
         meeting = execute_query(query, (id,))
         if not meeting:
             return jsonify({"success": False, "message": "Meeting not found"}), 404
             
+        status = meeting[0].get('status', 'scheduled')
+        scheduled_dt = meeting[0].get('scheduled_at')
+        
+        is_overdue = False
+        if status not in ('completed', 'cancelled') and scheduled_dt:
+            from datetime import datetime, date
+            try:
+                if isinstance(scheduled_dt, str):
+                    dt_str = scheduled_dt.split('T')[0]
+                    m_date = datetime.strptime(dt_str, "%Y-%m-%d").date()
+                elif isinstance(scheduled_dt, datetime):
+                    m_date = scheduled_dt.date()
+                else:
+                    m_date = scheduled_dt
+                if m_date < date.today():
+                    is_overdue = True
+            except Exception:
+                pass
+                
+        # Also check if client explicitly sent is_overdue
+        data = request.json or {}
+        if data.get('is_overdue') or data.get('overdue'):
+            is_overdue = True
+
         # Trigger background email notifications
-        from services.notification_service import trigger_meeting_notifications
-        trigger_meeting_notifications(id)
-        return jsonify({"success": True, "message": "Notification sent successfully"}), 200
+        from services.notification_service import trigger_meeting_notifications, trigger_overdue_notifications
+        if is_overdue:
+            trigger_overdue_notifications(id)
+            msg = "Overdue notification email sent successfully"
+        else:
+            trigger_meeting_notifications(id)
+            msg = "Notification sent successfully"
+            
+        return jsonify({"success": True, "message": msg, "is_overdue": is_overdue}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

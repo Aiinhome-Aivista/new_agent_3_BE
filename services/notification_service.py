@@ -5,16 +5,22 @@ from db import execute_query
 
 logger = logging.getLogger(__name__)
 
-def trigger_meeting_notifications(meeting_id):
+def trigger_meeting_notifications(meeting_id, is_overdue=False):
     """
     Triggers meeting notifications in a background thread.
     """
-    thread = threading.Thread(target=_send_meeting_notification_async, args=(meeting_id,))
+    thread = threading.Thread(target=_send_meeting_notification_async, args=(meeting_id, is_overdue))
     thread.daemon = True
     thread.start()
-    logger.info(f"Spawned background notification thread for meeting ID: {meeting_id}")
+    logger.info(f"Spawned background notification thread for meeting ID: {meeting_id} (is_overdue={is_overdue})")
 
-def _send_meeting_notification_async(meeting_id):
+def trigger_overdue_notifications(meeting_id):
+    """
+    Triggers overdue meeting notifications in a background thread.
+    """
+    trigger_meeting_notifications(meeting_id, is_overdue=True)
+
+def _send_meeting_notification_async(meeting_id, is_overdue=False):
     logger.info(f"Notification thread started. Meeting Created: Meeting ID = {meeting_id}")
     try:
         from config import Config
@@ -94,7 +100,22 @@ def _send_meeting_notification_async(meeting_id):
         timezone = "IST"  # Default local system/workspace timezone
 
         # 5. Build and send HTML emails to each participant
-        subject = f"KT Meeting Scheduled - {meeting['title']}"
+        if is_overdue:
+            subject = f"OVERDUE: KT Meeting - {meeting['title']}"
+            header_title = "KT Session Overdue Notice"
+            header_color = "#dc2626"
+            intro_text = f"""<p><strong style="color: #dc2626;">OVERDUE NOTICE:</strong> This Knowledge Transfer (KT) meeting was scheduled for <strong>{meeting_date}</strong> and is currently marked as <strong>Overdue</strong> (not completed).</p>"""
+            action_box = """
+      <div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 12px; margin-top: 16px; border-radius: 4px; color: #991b1b;">
+        <strong>Action Required:</strong> Please coordinate with your team to either reschedule this meeting to a future date or record attendance and mark it completed.
+      </div>
+            """
+        else:
+            subject = f"KT Meeting Scheduled - {meeting['title']}"
+            header_title = "Knowledge Transfer Meeting"
+            header_color = "#0052cc"
+            intro_text = "<p>A new Knowledge Transfer (KT) meeting has been scheduled. Please find the details below:</p>"
+            action_box = ""
         
         # Format description and meeting link optional fields
         description_row = ""
@@ -235,12 +256,12 @@ END:VCALENDAR"""
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h1>Knowledge Transfer Meeting</h1>
+    <div class="header" style="background-color: {header_color};">
+      <h1>{header_title}</h1>
     </div>
     <div class="content">
       <p>Hello {name},</p>
-      <p>A new Knowledge Transfer (KT) meeting has been scheduled. Please find the details below:</p>
+      {intro_text}
       
       <div class="meeting-details">
         <table>
@@ -270,7 +291,7 @@ END:VCALENDAR"""
           {link_row}
         </table>
       </div>
-      
+      {action_box}
       <p>Please make sure to update your calendar and join on time.</p>
       <p>Best regards,<br><strong>KT Manager Notification Service</strong></p>
     </div>
