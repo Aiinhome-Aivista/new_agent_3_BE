@@ -109,7 +109,7 @@ def get_plans():
             
             if stakeholder_id:
                 if for_dropdown:
-                    query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status = 'approved' ORDER BY created_at DESC"
+                    query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status IN ('approved', 'closed') ORDER BY created_at DESC"
                     plans = execute_query(query, (stakeholder_id,))
                 else:
                     query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s ORDER BY created_at DESC"
@@ -201,6 +201,43 @@ def approve_plan(id):
             execute_write(query, (id,))
 
         return jsonify({"success": True, "message": "Plan approved successfully"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:id>/close', methods=['PUT'])
+def close_plan(id):
+    try:
+        from services.plan_service import resolve_stakeholder_for_user
+        stakeholder_id = None
+
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                import jwt
+                from config import Config
+                payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+                user_email = payload.get('email')
+                user_role = payload.get('role')
+                user_id = payload.get('sub')
+                user_full_name = None
+                if user_id:
+                    users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                    if users:
+                        user_full_name = users[0]['full_name']
+                if user_email:
+                    stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            except Exception:
+                pass
+
+        if stakeholder_id:
+            query = "UPDATE kt_plans SET status = 'closed' WHERE id = %s AND (created_by = %s OR approved_by = %s)"
+            execute_write(query, (id, stakeholder_id, stakeholder_id))
+        else:
+            query = "UPDATE kt_plans SET status = 'closed' WHERE id = %s"
+            execute_write(query, (id,))
+
+        return jsonify({"success": True, "message": "Plan closed successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
