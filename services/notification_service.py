@@ -638,3 +638,200 @@ END:VCALENDAR"""
     except Exception as e:
         logger.error(f"Reschedule Notification Service error for meeting {meeting_id}: {e}")
 
+def trigger_final_assessment_reminder(plan_id):
+    """
+    Triggers an email notification to Knowledge Receiver(s) if KT topics for the plan
+    are completed (or unlocked by manager) and they haven't taken the Final Assessment yet.
+    If the deadline window has expired, sends an Expired Notice instead.
+    Runs asynchronously in a background thread.
+    """
+    thread = threading.Thread(target=_send_final_assessment_reminder_async, args=(plan_id,))
+    thread.daemon = True
+    thread.start()
+    logger.info(f"Spawned background Final Assessment reminder thread for plan ID: {plan_id}")
+
+def _send_final_assessment_reminder_async(plan_id):
+    logger.info(f"Final Assessment reminder thread started for plan ID: {plan_id}")
+    try:
+        from config import Config
+        from datetime import datetime
+
+        # 1. Fetch plan info
+        plan_query = "SELECT id, application_name, is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
+        plan_res = execute_query(plan_query, (plan_id,))
+        if not plan_res:
+            logger.error(f"Final Assessment Reminder Error: Plan {plan_id} not found.")
+            return
+
+        plan_info = plan_res[0]
+        app_name = plan_info.get('application_name') or f"Plan #{plan_id}"
+        is_unlocked = bool(plan_info.get('is_final_unlocked'))
+        deadline_days = plan_info.get('final_deadline_extension_days') or 90
+
+        # 2. Check if plan topics are completed or if manager unlocked
+        comp_query = """
+            SELECT 
+                (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
+                (SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics
+            FROM DUAL
+        """
+        comp_res = execute_query(comp_query, (plan_id, plan_id))
+        completed_cnt = comp_res[0]['completed_topics'] if comp_res else 0
+        total_cnt = comp_res[0]['total_topics'] if comp_res else 0
+
+        is_plan_completed = total_cnt > 0 and completed_cnt >= total_cnt
+
+        if not is_plan_completed and not is_unlocked and completed_cnt == 0:
+            logger.info(f"Final Assessment Reminder Skipped: Plan {plan_id} has no completed topics and not unlocked by manager.")
+            return
+
+        # Check completion timestamps to determine if deadline expired
+        comp_time_query = "SELECT MAX(last_updated) as max_time FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100"
+        time_res = execute_query(comp_time_query, (plan_id,))
+        max_time = time_res[0]['max_time'] if time_res else None
+        
+        is_expired = False
+        elapsed_days = 0
+        if max_time:
+            if isinstance(max_time, str):
+                try:
+                    max_time = datetime.fromisoformat(max_time.replace('Z', ''))
+                except Exception:
+                    max_time = None
+            if max_time:
+                elapsed_days = max(0, (datetime.now() - max_time).days)
+                if elapsed_days >= deadline_days:
+                    is_expired = True
+
+        # 3. Find Knowledge Receivers associated with this plan or in system
+        receivers_query = """
+            SELECT DISTINCT s.id, s.name, s.email 
+            FROM stakeholders s
+            WHERE (s.role IN ('Incoming Team Member (Knowledge Receiver)', 'incoming_member') OR s.role LIKE '%incoming%' OR s.role LIKE '%Receiver%')
+              AND s.email IS NOT NULL AND s.email != ''
+        """
+        receivers = execute_query(receivers_query)
+        if not receivers:
+            logger.warning(f"Final Assessment Reminder Skipped: No Knowledge Receivers found for plan {plan_id}.")
+            return
+
+        # 4. Filter receivers who have NOT completed the Final Assessment yet
+        pending_receivers = []
+        for r in receivers:
+            s_id = r['id']
+            res_query = "SELECT id FROM assessment_results WHERE plan_id = %s AND stakeholder_id = %s AND assessment_type = 'final'"
+            res_rows = execute_query(res_query, (plan_id, s_id))
+            if not res_rows:
+                pending_receivers.append(r)
+
+        if not pending_receivers:
+            logger.info(f"Final Assessment Reminder Skipped: All Knowledge Receivers have already completed the Final Assessment for plan {plan_id}.")
+            return
+
+        # 5. Send Email Reminder OR Expired Notice to each pending Knowledge Receiver
+        for r in pending_receivers:
+            recipient_email = r['email']
+            recipient_name = r.get('name') or "Knowledge Receiver"
+            
+            if is_expired:
+                subject = f"Notice: Final Assessment Window Expired for {app_name}"
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f5f7; margin: 0; padding: 20px; }}
+    .card {{ background-color: #ffffff; max-width: 600px; margin: 0 auto; border-radius: 12px; padding: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }}
+    .header {{ border-bottom: 2px solid #ef4444; padding-bottom: 15px; margin-bottom: 20px; }}
+    .title {{ font-size: 20px; color: #991b1b; font-weight: bold; margin: 0; }}
+    .badge {{ display: inline-block; background-color: #fee2e2; color: #991b1b; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-top: 8px; }}
+    .body-text {{ font-size: 14px; color: #374151; line-height: 1.6; margin-top: 15px; }}
+    .expired-box {{ background-color: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 15px; margin: 20px 0; font-size: 13px; color: #991b1b; line-height: 1.6; }}
+    .footer {{ font-size: 12px; color: #6b7280; text-align: center; margin-top: 30px; border-top: 1px solid #f3f4f6; padding-top: 15px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h2 class="title">Final Assessment Window Expired</h2>
+      <span class="badge">PwC Knowledge Transfer Portal</span>
+    </div>
+    
+    <p class="body-text">Dear <strong>{recipient_name}</strong>,</p>
+    
+    <p class="body-text">
+      This is to inform you that the deadline window for taking your <strong>Final Assessment</strong> for <strong>{app_name}</strong> has expired.
+    </p>
+    
+    <div class="expired-box">
+      🚫 <strong>Status:</strong> Assessment Window Closed<br/>
+      ⌛ <strong>Time Elapsed:</strong> {elapsed_days} day(s) have passed (Deadline Limit: {deadline_days} days).<br/>
+      ⚠️ <strong>Action Required:</strong> You can no longer start this assessment unless your Delivery Manager extends the deadline window.
+    </div>
+    
+    <p class="body-text">
+      If you still need to complete your Final Assessment, please reach out to your <strong>Delivery Manager</strong> to request a deadline extension.
+    </p>
+    
+    <div class="footer">
+      This is an automated notification from the PwC KT Manager application. Please do not reply directly to this email.
+    </div>
+  </div>
+</body>
+</html>"""
+            else:
+                subject = f"Action Required: Final Assessment Pending for {app_name}"
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f5f7; margin: 0; padding: 20px; }}
+    .card {{ background-color: #ffffff; max-width: 600px; margin: 0 auto; border-radius: 12px; padding: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }}
+    .header {{ border-bottom: 2px solid #6366f1; padding-bottom: 15px; margin-bottom: 20px; }}
+    .title {{ font-size: 20px; color: #1e1b4b; font-weight: bold; margin: 0; }}
+    .badge {{ display: inline-block; background-color: #e0e7ff; color: #3730a3; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-top: 8px; }}
+    .body-text {{ font-size: 14px; color: #374151; line-height: 1.6; margin-top: 15px; }}
+    .highlight-box {{ background-color: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 8px; padding: 15px; margin: 20px 0; font-size: 13px; color: #4c1d95; }}
+    .footer {{ font-size: 12px; color: #6b7280; text-align: center; margin-top: 30px; border-top: 1px solid #f3f4f6; padding-top: 15px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h2 class="title">Final Assessment Pending</h2>
+      <span class="badge">PwC Knowledge Transfer Portal</span>
+    </div>
+    
+    <p class="body-text">Dear <strong>{recipient_name}</strong>,</p>
+    
+    <p class="body-text">
+      The Knowledge Transfer topics for <strong>{app_name}</strong> are ready for final evaluation. 
+      This is a reminder that your <strong>Final Assessment</strong> has not been taken yet.
+    </p>
+    
+    <div class="highlight-box">
+      ⏰ <strong>Assessment Deadline Window:</strong> You have <strong>{max(0, deadline_days - elapsed_days)} days</strong> remaining to complete your Final Assessment.<br/>
+      🎯 <strong>Mode:</strong> Final Assessment (Mandatory)
+    </div>
+    
+    <p class="body-text">
+      Please log in to the PwC KT Portal and complete your Final Assessment under the <strong>Assessment</strong> section.
+    </p>
+    
+    <div class="footer">
+      This is an automated notification from the PwC KT Manager application. Please do not reply directly to this email.
+    </div>
+  </div>
+</body>
+</html>"""
+            
+            success = EmailService.send_html_email(recipient_email, subject, html_content)
+            if success:
+                logger.info(f"Final Assessment Notification Email Sent to {recipient_email} for plan {plan_id} (is_expired={is_expired})")
+            else:
+                logger.error(f"Final Assessment Notification Email Failed to {recipient_email} for plan {plan_id}")
+
+    except Exception as e:
+        logger.error(f"Error in Final Assessment Reminder notification thread: {e}")
+

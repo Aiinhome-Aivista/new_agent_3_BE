@@ -60,6 +60,14 @@ def update_completion():
 
         from services.tracking_service import update_completion_service
         update_completion_service(data['plan_id'], data['topic'], data['completion_percent'], updated_by=stakeholder_id)
+        
+        # Trigger Final Assessment email reminder check if plan topics completed
+        try:
+            from services.notification_service import trigger_final_assessment_reminder
+            trigger_final_assessment_reminder(data['plan_id'])
+        except Exception:
+            pass
+
         return jsonify({"success": True, "message": "Completion updated successfully"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
