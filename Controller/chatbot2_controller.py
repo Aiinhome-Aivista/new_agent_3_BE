@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from llm_service import call_llm, load_prompt
 from db import execute_query, execute_write
 import time
+from datetime import datetime
 
 chatbot2_bp = Blueprint("chatbot2_bp", __name__)
 
@@ -23,6 +24,7 @@ def ask_chatbot2():
 
     session_id = data["session_id"]
     question = data["question"]
+    current_date = datetime.now().strftime("%Y-%m-%d")
     sql = None
     try:
         overall_start = time.time()
@@ -90,7 +92,7 @@ def ask_chatbot2():
                     )
 
             # Step 1: SQL generate
-            sql_prompt = load_prompt("chatbot2_sql_generation.txt", question=question)
+            sql_prompt = load_prompt("chatbot2_sql_generation.txt", question=question, current_date=current_date)
 
             sql_start = time.time()
             sql = call_llm(sql_prompt)
@@ -120,7 +122,7 @@ def ask_chatbot2():
             rows = execute_query(sql)
             if rows:
                 db_result = "\n".join(
-                    ", ".join(f"{k}: {v}" for k, v in row.items())
+                    "- " + ", ".join(f"{k}: {v}" for k, v in row.items())
                     for row in rows
                 )
             else:
@@ -130,7 +132,7 @@ def ask_chatbot2():
             print("Database Rows:")
             print(rows)
 
-            answer_prompt = load_prompt("chatbot2_answer_generation.txt", rag_context=rag_context, db_result=db_result, question=question)
+            answer_prompt = load_prompt("chatbot2_answer_generation.txt", rag_context=rag_context, db_result=db_result, question=question, current_date=current_date)
 
             answer_start = time.time()
             answer = call_llm(answer_prompt) 
@@ -163,3 +165,12 @@ def ask_chatbot2():
             "success": False,
             "message": str(e)
         }), 500
+
+@chatbot2_bp.route("/history/<session_id>", methods=["GET"])
+def get_history(session_id):
+    try:
+        query = "SELECT * FROM chat_history WHERE session_id = %s ORDER BY created_at ASC"
+        history = execute_query(query, (session_id,))
+        return jsonify({"success": True, "data": history}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500

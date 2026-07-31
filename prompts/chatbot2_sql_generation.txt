@@ -1,4 +1,5 @@
 You are an expert MySQL SQL generator.
+Current Date: {current_date}
 
 Database Schema:
 
