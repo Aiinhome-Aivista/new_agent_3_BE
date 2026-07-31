@@ -512,6 +512,7 @@ def get_plan_assessment_settings(plan_id):
             }
         }), 200
 
+
 @assessment_bp.route('/plan/<int:plan_id>/settings', methods=['PUT'])
 def update_plan_assessment_settings(plan_id):
     data = request.json or {}
@@ -519,12 +520,53 @@ def update_plan_assessment_settings(plan_id):
         is_unlocked = 1 if data.get('is_final_unlocked') else 0
         days = int(data.get('final_deadline_extension_days', 90))
         
+        if days <= 0:
+            return jsonify({"success": False, "message": "Deadline window days must be a positive integer."}), 400
+
+        # Calculate elapsed days since completion to ensure new deadline window > elapsed days
+        completed_topics_res = execute_query(
+            "SELECT last_updated FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
+            (plan_id,)
+        )
+        plan_topics_cnt = execute_query(
+            "SELECT COUNT(*) as cnt FROM plan_topics WHERE plan_id = %s",
+            (plan_id,)
+        )
+        total_topics = plan_topics_cnt[0]['cnt'] if plan_topics_cnt else 0
+        all_completed = total_topics > 0 and len(completed_topics_res or []) >= total_topics
+
+        if all_completed and completed_topics_res:
+            from datetime import datetime
+            timestamps = [row['last_updated'] for row in completed_topics_res if row.get('last_updated')]
+            if timestamps:
+                latest_completed = max(timestamps)
+                if isinstance(latest_completed, str):
+                    try:
+                        latest_completed = datetime.fromisoformat(latest_completed.replace('Z', ''))
+                    except Exception:
+                        latest_completed = None
+                if latest_completed:
+                    elapsed_days = max(0, (datetime.now() - latest_completed).days)
+                    if days <= elapsed_days:
+                        return jsonify({
+                            "success": False,
+                            "message": f"Invalid Deadline! Already {elapsed_days} day(s) have passed since plan completion. The new deadline window must be greater than {elapsed_days} day(s)."
+                        }), 400
+
         query = """
             UPDATE kt_plans 
             SET is_final_unlocked = %s, final_deadline_extension_days = %s
             WHERE id = %s
         """
         execute_write(query, (is_unlocked, days, plan_id))
+
+        # Trigger Final Assessment email reminder check if settings updated/unlocked
+        try:
+            from services.notification_service import trigger_final_assessment_reminder
+            trigger_final_assessment_reminder(plan_id)
+        except Exception:
+            pass
+
         return jsonify({
             "success": True,
             "message": "Manager assessment settings updated successfully.",
@@ -532,6 +574,18 @@ def update_plan_assessment_settings(plan_id):
                 "is_final_unlocked": bool(is_unlocked),
                 "final_deadline_extension_days": days
             }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@assessment_bp.route('/plan/<int:plan_id>/notify-reminder', methods=['POST'])
+def send_final_assessment_reminder_route(plan_id):
+    try:
+        from services.notification_service import trigger_final_assessment_reminder
+        trigger_final_assessment_reminder(plan_id)
+        return jsonify({
+            "success": True,
+            "message": "Final Assessment email reminder triggered successfully to pending Knowledge Receivers."
         }), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
