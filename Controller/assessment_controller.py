@@ -106,7 +106,7 @@ def generate_questions():
         
         from rag_service import query_knowledge, extract_day_key
 
-        # Check if any knowledge documents are uploaded for this plan / day in DB
+        # Check if knowledge documents are uploaded for this plan / day in DB
         if assessment_type == 'day_wise' and day_label:
             target_key = extract_day_key(day_label)
             all_docs = execute_query("SELECT id, kt_day FROM knowledge_documents WHERE plan_id = %s", (plan_id,))
@@ -117,20 +117,71 @@ def generate_questions():
                     if target_key and doc_day_key and (target_key == doc_day_key or target_key in doc_day_key or doc_day_key in target_key):
                         docs_exist = True
                         break
+            if not docs_exist:
+                return jsonify({
+                    "success": False,
+                    "message": f"Knowledge document for '{day_label}' is not uploaded."
+                }), 400
         else:
-            doc_query = "SELECT id FROM knowledge_documents WHERE plan_id = %s LIMIT 1"
-            docs_exist = bool(execute_query(doc_query, (plan_id,)))
-        
-        if not docs_exist:
-            return jsonify({
-                "success": False,
-                "message": "Documents are not uploaded."
-            }), 400
+            # Final Assessment: Check documents for ALL completed / required days
+            plan_topics_rows = execute_query(
+                "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s",
+                (plan_id,)
+            )
+            
+            # Map completed topics to their corresponding day_label
+            days_map = {}
+            if plan_topics_rows:
+                for pt in plan_topics_rows:
+                    d_label = (pt.get('day_label') or 'General').strip()
+                    t_name = (pt.get('topic_name') or '').strip().lower()
+                    if d_label not in days_map:
+                        days_map[d_label] = []
+                    if t_name:
+                        days_map[d_label].append(t_name)
+
+            target_topics_set = set(t.strip().lower() for t in target_topics)
+
+            required_days = []
+            if days_map:
+                for d_label, t_list in days_map.items():
+                    d_label_lower = d_label.lower()
+                    has_completed_topic = any(tn in target_topics_set for tn in t_list)
+                    is_day_completed = d_label_lower in target_topics_set
+                    is_partial_match = any(ct in d_label_lower or d_label_lower in ct or any(ct in tn or tn in ct for tn in t_list) for ct in target_topics_set)
+                    
+                    if has_completed_topic or is_day_completed or is_partial_match:
+                        required_days.append(d_label)
+
+            if not required_days and days_map:
+                required_days = list(days_map.keys())
+
+            all_docs = execute_query("SELECT id, kt_day FROM knowledge_documents WHERE plan_id = %s", (plan_id,)) or []
+            uploaded_day_keys = set()
+            for d in all_docs:
+                d_key = extract_day_key(d.get('kt_day', ''))
+                if d_key:
+                    uploaded_day_keys.add(d_key)
+
+            missing_days = []
+            for req_day in required_days:
+                req_key = extract_day_key(req_day)
+                if req_key:
+                    has_doc = any(req_key == uk or req_key in uk or uk in req_key for uk in uploaded_day_keys)
+                    if not has_doc:
+                        missing_days.append(req_day)
+
+            if missing_days:
+                missing_str = ", ".join(missing_days)
+                return jsonify({
+                    "success": False,
+                    "message": f"Knowledge documents for the following day(s) are missing: {missing_str}. All completed day documents must be uploaded before starting the Final Assessment."
+                }), 400
 
         context_texts = []
         target_day_filter = day_label if assessment_type == 'day_wise' else None
         
-        for topic in target_topics[:5]:
+        for topic in target_topics[:15]:
             results = query_knowledge(topic, plan_id=plan_id, kt_day=target_day_filter, n_results=3)
             for r in results:
                 if r['text'] not in context_texts:
@@ -141,7 +192,7 @@ def generate_questions():
         if not context_str.strip():
             return jsonify({
                 "success": False,
-                "message": "Documents are not uploaded."
+                "message": "Documents are not uploaded or contain no extractable text."
             }), 400
 
         mode_desc = f"Day-wise Assessment (Optional) for '{day_label}'" if assessment_type == 'day_wise' and day_label else "Final Comprehensive Assessment (Mandatory)"
