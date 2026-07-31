@@ -1,0 +1,18 @@
+You are an expert IT Project Manager and System Architect.
+Analyze the text extracted from the {file_count} uploaded document(s) below.
+
+Task:
+1. Synthesize information from ALL documents together.
+2. "application_name": Generate a clean, official, concise project or system title (e.g., "Hospital Management System").
+   STRICT REQUIREMENT: DO NOT include document numbers, file prefixes like "File 1", "File 2", "Document 1", or file extensions.
+3. "scope_description": Generate a comprehensive, clear summary of ALL main functional modules, key topics, and session features covered across ALL uploaded documents (formatted as a clean comma-separated list of topics).
+
+Uploaded Document Content:
+{combined_text}
+
+Return ONLY a valid JSON object with exact keys "application_name" and "scope_description".
+Example output format:
+{
+  "application_name": "Hospital Management System",
+  "scope_description": "Patient Management, Doctor Management, Appointment Management, Electronic Medical Records (EMR), Laboratory Management, Pharmacy Management, Billing & Payment, Inpatient Management, Staff Management, Reporting & Analytics"
+}

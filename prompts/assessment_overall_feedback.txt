@@ -1,0 +1,7 @@
+Analyze the candidate's performance across the following conversational assessment questions and answers:
+
+{summary_str}
+
+Generate a cohesive, constructive summary feedback paragraph for the overall assessment.
+Highlight areas of strength and areas where further knowledge transfer might be needed.
+Keep it concise and professional (maximum 3-4 sentences).

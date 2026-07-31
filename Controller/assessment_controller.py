@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import execute_query, execute_write
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 from config import Config
 import json
 
@@ -197,23 +197,13 @@ def generate_questions():
 
         mode_desc = f"Day-wise Assessment (Optional) for '{day_label}'" if assessment_type == 'day_wise' and day_label else "Final Comprehensive Assessment (Mandatory)"
 
-        prompt = f"""
-        Assessment Mode: {mode_desc}
-
-        Target Topics:
-        {topics_str}
-        
-        Knowledge Base Context:
-        {context_str}
-        
-        Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
-        
-        IMPORTANT:
-        - You MUST generate questions STRICTLY based on the provided Knowledge Base Context.
-        - The questions must also relate to the Target Topics above.
-        - Do NOT generate questions using outside knowledge or generally. ONLY use the provided Context.
-        - Return ONLY a JSON array of strings, where each string is a question.
-        """
+        prompt = load_prompt(
+            "assessment_question_generation.txt",
+            mode_desc=mode_desc,
+            topics_str=topics_str,
+            context_str=context_str,
+            question_count=Config.ASSESSMENT_QUESTION_COUNT
+        )
 
         # =========================================================================
         # COMMENTED OUT (Per User Requirement):
@@ -264,14 +254,7 @@ def submit_answer():
         return jsonify({"success": False, "message": reason}), 400
         
     try:
-        prompt = f"""
-        Score the following answer to an assessment question on a scale of 0 to 10.
-        Question: {data['question']}
-        Answer: {data['answer']}
-        
-        Provide constructive feedback.
-        Return ONLY a JSON object with keys "score" (integer 0-10) and "feedback" (string).
-        """
+        prompt = load_prompt("assessment_answer_scoring.txt", question=data['question'], answer=data['answer'])
         
         llm_response = call_llm(prompt)
         
@@ -387,15 +370,7 @@ def complete_assessment():
             
         summary_str = "\n\n".join(q_a_summaries)
         
-        prompt = f"""
-        Analyze the candidate's performance across the following conversational assessment questions and answers:
-        
-        {summary_str}
-        
-        Generate a cohesive, constructive summary feedback paragraph for the overall assessment.
-        Highlight areas of strength and areas where further knowledge transfer might be needed.
-        Keep it concise and professional (maximum 3-4 sentences).
-        """
+        prompt = load_prompt("assessment_overall_feedback.txt", summary_str=summary_str)
         
         overall_feedback = call_llm(prompt)
         overall_feedback = overall_feedback.strip()

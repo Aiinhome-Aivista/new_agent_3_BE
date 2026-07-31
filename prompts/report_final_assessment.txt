@@ -1,0 +1,18 @@
+Write a comprehensive Final KT Assessment Report for '{app_name}'.
+    
+The report MUST be generated based ONLY on the following covered topics of the selected plan ({source_type}):
+{topics_text}
+    
+CRITICAL:
+- Only include information, assessment of readiness, and content directly relating to these covered topics.
+- Do NOT include, mention, or describe any other topics, modules, or content. Absolutely no extra content is allowed outside of these covered topics.
+    
+Structure the report with:
+- Executive Summary (focusing ONLY on the covered topics)
+- Detailed Assessment of Readiness (for each covered topic listed above)
+- Sign-off Section (You MUST use the exact names provided below for the signatures)
+    
+Sign-off details to use:
+Engagement Manager: {manager_name}
+Knowledge Giver(s): {giver_names}
+Knowledge Receiver(s): {receiver_names}

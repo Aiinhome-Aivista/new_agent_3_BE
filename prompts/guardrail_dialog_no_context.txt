@@ -1,0 +1,2 @@
+Is this a valid question for a Knowledge Transfer (KT) assistant? Allowed topics include KT plans, schedules, risks, assessments, AND technical/training topics, processes, or domain knowledge covered in the KT. Answer only YES or NO.
+Question: {question}

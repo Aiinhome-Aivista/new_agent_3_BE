@@ -1,5 +1,5 @@
 from db import execute_query, execute_write
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 import json
 import os
 from datetime import datetime
@@ -46,25 +46,14 @@ def detect_risks_service(plan_id):
         rag_chunks = []
     rag_context = "\n".join([chunk["text"] for chunk in rag_chunks]) if rag_chunks else "None"
     
-    prompt = f"""
-    Analyze the following Knowledge Transfer (KT) tracking data AND the uploaded Knowledge Base documents to identify potential risks.
-    
-    Plan Info: {plan_data[0] if plan_data else 'N/A'}
-    Topic Completions: {comp_data}
-    Detailed Meeting/Topic Attendance (Role, Name, Attended): {detailed_att_data}
-    Knowledge Receiver Assessment Results: {assess_data}
-    Uploaded Knowledge Base Context: {rag_context}
-    
-    CRITICAL INSTRUCTION: You MUST generate risks strictly on a PER-TOPIC basis. 
-    Evaluate the following for each topic/meeting:
-    1. Is the Knowledge Giver (Outgoing SME) taking KTs according to the schedule? (Look at their attendance in the meetings).
-    2. Which Knowledge Receivers (Incoming Members) have low attendance or missed KTs for the topic?
-    3. Which Knowledge Receivers have poor/failed assessment results for the topic?
-    
-    Identify up to 5 major risks based specifically on the giver's scheduling/attendance, receivers' low attendance, and receivers' poor assessment results per topic. Also consider any gaps mentioned in the Uploaded Knowledge Base Context.
-    For each risk, assign a severity ('low', 'medium', 'high', 'critical').
-    Return ONLY a JSON array of objects with keys "description" (string) and "severity" (string). Do not return markdown.
-    """
+    prompt = load_prompt(
+        "risk_detection.txt",
+        plan_info=(plan_data[0] if plan_data else 'N/A'),
+        comp_data=comp_data,
+        detailed_att_data=detailed_att_data,
+        assess_data=assess_data,
+        rag_context=rag_context
+    )
     
     llm_response = call_llm(prompt)
     

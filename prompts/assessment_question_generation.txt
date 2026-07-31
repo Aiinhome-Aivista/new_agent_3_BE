@@ -1,0 +1,15 @@
+Assessment Mode: {mode_desc}
+
+Target Topics:
+{topics_str}
+
+Knowledge Base Context:
+{context_str}
+
+Generate exactly {question_count} assessment questions.
+
+IMPORTANT:
+- You MUST generate questions STRICTLY based on the provided Knowledge Base Context.
+- The questions must also relate to the Target Topics above.
+- Do NOT generate questions using outside knowledge or generally. ONLY use the provided Context.
+- Return ONLY a JSON array of strings, where each string is a question.

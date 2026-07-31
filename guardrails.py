@@ -1,5 +1,5 @@
 import re
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 from db import execute_write
 
 def log_guardrail(rail_type: str, passed: bool, reason: str, endpoint: str):
@@ -40,9 +40,9 @@ def input_rail(payload: dict, required_fields: list, endpoint: str) -> tuple[boo
 
 def dialog_rail(question: str, endpoint: str, has_context: bool = False) -> tuple[bool, str]:
     if has_context:
-        prompt = f"Is this question completely out-of-scope (e.g., about weather, sports, or general coding entirely unrelated to a specific KT project)? Answer NO if it is out-of-scope, YES if it could plausibly be related to a KT project, its domain, technical implementation, architecture, or processes.\nQuestion: {question}"
+        prompt = load_prompt("guardrail_dialog_with_context.txt", question=question)
     else:
-        prompt = f"Is this a valid question for a Knowledge Transfer (KT) assistant? Allowed topics include KT plans, schedules, risks, assessments, AND technical/training topics, processes, or domain knowledge covered in the KT. Answer only YES or NO.\nQuestion: {question}"
+        prompt = load_prompt("guardrail_dialog_no_context.txt", question=question)
         
     llm_resp = call_llm(prompt)
     
@@ -62,67 +62,9 @@ def dialog_rail(question: str, endpoint: str, has_context: bool = False) -> tupl
 def dialog_rail2(question: str, endpoint: str, has_context: bool = False) -> tuple[bool, str]:
 
         if has_context:
-            prompt = f"""
-    You are a guardrail for a Virtual KT Manager assistant.
-
-    Allow questions related to:
-    - KT plans
-    - Meetings
-    - Meeting schedules
-    - Meeting links
-    - Organizers
-    - Attendance
-    - Stakeholders
-    - Risks
-    - Topics
-    - Applications
-    - Knowledge documents
-    - Reports
-    - Assessments
-    - Completion tracking
-    - Technical implementation
-    - Project architecture
-    - APIs
-    - Training content
-    - KT processes
-
-    Return ONLY one word:
-
-    YES
-    or
-    NO
-
-    Question:
-    {question}
-    """
+            prompt = load_prompt("guardrail_dialog2_with_context.txt", question=question)
         else:
-            prompt = f"""
-    You are a guardrail for a Knowledge Transfer assistant.
-
-    Allow questions related to:
-    - KT plans
-    - Meetings
-    - Schedules
-    - Risks
-    - Attendance
-    - Stakeholders
-    - Topics
-    - Assessments
-    - Training
-    - Technical documentation
-    - Knowledge base
-
-    Reject unrelated questions.
-
-    Return ONLY:
-
-    YES
-    or
-    NO
-
-    Question:
-    {question}
-    """
+            prompt = load_prompt("guardrail_dialog2_no_context.txt", question=question)
 
         llm_resp = call_llm(prompt)
 

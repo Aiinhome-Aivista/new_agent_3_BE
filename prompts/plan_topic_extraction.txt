@@ -1,0 +1,12 @@
+Below is a Knowledge Transfer plan. Extract every individual topic/session line item listed in its
+"Sessions / Topics Breakdown" tables (ignore the tables' header row and separator lines).
+
+Plan content:
+{generated_content}
+
+Return ONLY a JSON array of objects, each with keys:
+- "day_label" (string, e.g. "Day 1: Python Fundamentals and Core Concepts" — the section heading this topic falls under, or "General" if there are no day sections)
+- "topic_name" (string, the topic/row name, e.g. "Data Types and Variables")
+- "estimated_duration_hours" (string, e.g. "1" — use "N/A" if not specified)
+
+Do not include any explanation, only the JSON array.

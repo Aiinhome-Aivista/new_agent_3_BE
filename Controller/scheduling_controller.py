@@ -75,27 +75,15 @@ def create_meeting():
         for row in topics_result:
             days_dict[row['day_label']].append(row['topic_name'])
             
-        # Prepare LLM prompt
-        prompt = "I am scheduling a knowledge transfer series. Here are the topics grouped by days:\n\n"
+        topics_lines = []
         for day, topics in days_dict.items():
-            prompt += f"{day}:\n"
+            topics_lines.append(f"{day}:")
             for t in topics:
-                prompt += f"- {t}\n"
-            prompt += "\n"
-            
-        prompt += """
-Please generate a single Meeting Title, a brief Description, and a random start_time for each day based on its topics.
-The start_time must be chosen randomly within working hours: between 10:00 and 17:00 (24-hour format, HH:MM).
-Each day should ideally have a DIFFERENT start_time — vary them naturally (e.g., 10:30, 14:00, 11:45, 15:30, etc.).
-Meetings are 2 hours long, so the latest start time allowed is 17:00 so the session ends by 19:00.
-Return the output ONLY as a valid JSON array of objects. Each object must have exactly four string keys: 'day', 'title', 'description', and 'start_time'.
-For example:
-[
-  { "day": "Day 1: Python Fundamentals and Core Concepts", "title": "Day 1 KT: Python Fundamentals", "description": "Introduction, Setup, Syntax, and basic programming.", "start_time": "10:30" },
-  { "day": "Day 2: Advanced Python", "title": "Day 2 KT: Advanced Python", "description": "OOP, decorators, generators.", "start_time": "14:00" }
-]
-"""
-        from llm_service import call_llm
+                topics_lines.append(f"- {t}")
+            topics_lines.append("")
+        topics_summary = "\n".join(topics_lines)
+        from llm_service import call_llm, load_prompt
+        prompt = load_prompt("scheduling_meeting_generation.txt", topics_summary=topics_summary)
         import json
         llm_response = call_llm(prompt)
         try:

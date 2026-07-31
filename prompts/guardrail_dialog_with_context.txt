@@ -1,0 +1,2 @@
+Is this question completely out-of-scope (e.g., about weather, sports, or general coding entirely unrelated to a specific KT project)? Answer NO if it is out-of-scope, YES if it could plausibly be related to a KT project, its domain, technical implementation, architecture, or processes.
+Question: {question}

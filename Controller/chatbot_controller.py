@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import execute_query, execute_write
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 
 chatbot_bp = Blueprint('chatbot_bp', __name__)
 
@@ -38,19 +38,7 @@ def ask_chatbot():
             plan = execute_query(plan_query)
             context_str = f"Context (Latest Plan): {plan[0] if plan else 'None'}."
         
-        prompt = f"""
-        You are a helpful AI assistant for the Virtual KT Manager system.
-        
-        Treat the 'Uploaded Knowledge Base Context' below as an authoritative source. 
-        You must ONLY answer the user's question using the provided Uploaded Knowledge Base Context and the selected plan context. Do not reference other plans or applications if the context contains data for a specific plan.
-        
-        CRITICAL RULE: If the user's question is a basic greeting (e.g. "hi", "hello", "how are you"), you may answer politely. 
-        However, for ANY other question, if the answer is NOT found in the 'Uploaded Knowledge Base Context' or the selected plan context, you MUST NOT use your general knowledge to answer. Simply state that you do not have the information in the provided knowledge base documents. DO NOT hallucinate or provide information from outside the context.
-        
-        {context_str}
-        
-        User Question: {question}
-        """
+        prompt = load_prompt("chatbot_qa.txt", context_str=context_str, question=question)
         
         dialog_passed, dialog_reason = dialog_rail(question, "/api/chat/ask", has_context=bool(plan_id))
         if not dialog_passed:

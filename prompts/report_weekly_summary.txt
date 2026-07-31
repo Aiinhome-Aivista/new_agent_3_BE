@@ -1,0 +1,5 @@
+Write a concise narrative summary for a Weekly KT Status Report.
+Overall Completion: {avg_comp}%
+Open Risks: {risks}
+    
+Structure the summary with: Progress, Risks & Issues, and Next Steps.

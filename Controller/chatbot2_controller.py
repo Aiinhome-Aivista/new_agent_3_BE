@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 from db import execute_query, execute_write
 import time
 
@@ -90,45 +90,7 @@ def ask_chatbot2():
                     )
 
             # Step 1: SQL generate
-            sql_prompt = f"""
-            You are an expert MySQL SQL generator.
-
-            Database Schema:
-
-            kt_plans(id, application_name, plan_type, status, created_at)
-            meetings(id, plan_id, title, scheduled_at, organizer_id, status, description, meeting_link)
-            attendance(id, meeting_id, stakeholder_id, attended, notes)
-            stakeholders(id, name, email, role)
-            risks(id, plan_id, description, severity, status, jira_ticket_ref)
-
-            Relationships:
-            - meetings.plan_id = kt_plans.id
-            - attendance.meeting_id = meetings.id
-            - attendance.stakeholder_id = stakeholders.id
-            - risks.plan_id = kt_plans.id
-            
-            Rules:
-            1. Generate ONLY one valid MySQL SELECT query.
-            2. Use ONLY the tables, columns and relationships provided.
-            3. Return ONLY the SQL query.
-            4. Do NOT include explanations, comments, markdown or ```sql.
-            5. Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE or TRUNCATE statements.
-            6. Never invent tables, columns, IDs or values.
-            7. Do not assume application names, meeting titles or statuses.
-            8. If the user does not specify a filter, do not add unnecessary WHERE conditions.
-            9. Use JOIN whenever information exists in related tables.
-            10. Use COUNT() for "how many" questions.
-            11. Use ORDER BY and LIMIT for latest, last, recent, highest, lowest and next.
-            12. For "today", use DATE(scheduled_at)=CURDATE().
-            13. For "next meeting", use scheduled_at > NOW() ORDER BY scheduled_at ASC LIMIT 1.
-            14. For "last meeting", use ORDER BY scheduled_at DESC LIMIT 1.
-            15. Always use the simplest correct MySQL query.
-            16. If the question cannot be answered using the given schema, return exactly:
-            SELECT 'NO_SQL_POSSIBLE';
-
-            Question:
-            {question}
-            """
+            sql_prompt = load_prompt("chatbot2_sql_generation.txt", question=question)
 
             sql_start = time.time()
             sql = call_llm(sql_prompt)
@@ -168,34 +130,7 @@ def ask_chatbot2():
             print("Database Rows:")
             print(rows)
 
-            answer_prompt = f"""
-            You are a Virtual KT Manager assistant.
-
-            Knowledge Context:
-            {rag_context}
-
-            Database Result:
-            {db_result}
-
-            User Question:
-            {question}
-
-            Instructions:
-            - Prefer the database result whenever it contains the answer.
-            - The database result is the source of truth.
-            - If the database result contains values such as counts, dates, names or links, convert them into a natural English answer.
-            - Never ignore a non-empty database result.
-            - Use the knowledge context only if the database result is empty or does not answer the question.
-            - Do not combine unrelated information.
-            - Do not make assumptions.
-            - Use clear and professional English.
-            - If one record exists, answer in one sentence.
-            - If multiple records exist, return a bullet list.
-            - If the result contains counts, dates, names, links, statuses, or other values, explain them naturally.
-            - If neither the database result nor the knowledge context contains the answer, reply exactly:
-            "I couldn't find this information."
-            Answer:
-            """
+            answer_prompt = load_prompt("chatbot2_answer_generation.txt", rag_context=rag_context, db_result=db_result, question=question)
 
             answer_start = time.time()
             answer = call_llm(answer_prompt) 

@@ -1,5 +1,5 @@
 from db import execute_query, execute_write
-from llm_service import call_llm
+from llm_service import call_llm, load_prompt
 import os
 from datetime import datetime
 try:
@@ -68,13 +68,7 @@ def generate_weekly_service(plan_id):
     risk_query = "SELECT description, severity FROM risks WHERE plan_id = %s AND status != 'resolved'"
     risks = execute_query(risk_query, (plan_id,))
     
-    prompt = f"""
-    Write a concise narrative summary for a Weekly KT Status Report.
-    Overall Completion: {avg_comp}%
-    Open Risks: {risks}
-    
-    Structure the summary with: Progress, Risks & Issues, and Next Steps.
-    """
+    prompt = load_prompt("report_weekly_summary.txt", avg_comp=avg_comp, risks=risks)
     
     summary = call_llm(prompt)
     
@@ -140,26 +134,15 @@ def generate_final_service(plan_id):
         global_receiver = execute_query("SELECT name FROM stakeholders WHERE role = 'Incoming Team Member (Knowledge Receiver)' OR role = 'incoming_member' OR role LIKE '%incoming%' OR role LIKE '%Receiver%' LIMIT 1")
         receiver_names = global_receiver[0]['name'] if global_receiver else "[Knowledge Receiver]"
 
-    prompt = f"""
-    Write a comprehensive Final KT Assessment Report for '{app_name}'.
-    
-    The report MUST be generated based ONLY on the following covered topics of the selected plan ({source_type}):
-    {topics_text}
-    
-    CRITICAL:
-    - Only include information, assessment of readiness, and content directly relating to these covered topics.
-    - Do NOT include, mention, or describe any other topics, modules, or content. Absolutely no extra content is allowed outside of these covered topics.
-    
-    Structure the report with:
-    - Executive Summary (focusing ONLY on the covered topics)
-    - Detailed Assessment of Readiness (for each covered topic listed above)
-    - Sign-off Section (You MUST use the exact names provided below for the signatures)
-    
-    Sign-off details to use:
-    Engagement Manager: {manager_name}
-    Knowledge Giver(s): {giver_names}
-    Knowledge Receiver(s): {receiver_names}
-    """
+    prompt = load_prompt(
+        "report_final_assessment.txt",
+        app_name=app_name,
+        source_type=source_type,
+        topics_text=topics_text,
+        manager_name=manager_name,
+        giver_names=giver_names,
+        receiver_names=receiver_names
+    )
     
     content = call_llm(prompt)
     
