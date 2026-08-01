@@ -9,6 +9,21 @@ def update_completion_service(plan_id, topic, completion_percent, updated_by=Non
     params = (plan_id, topic, completion_percent, updated_by)
     execute_write(query, params)
 
+    # Check if plan is 100% completed and update unlocked_on in kt_plans
+    try:
+        comp_res = execute_query(
+            "SELECT (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics, "
+            "(SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics",
+            (plan_id, plan_id)
+        )
+        if comp_res and comp_res[0].get('total_topics'):
+            c_cnt = int(comp_res[0]['completed_topics'] or 0)
+            t_cnt = int(comp_res[0]['total_topics'] or 0)
+            if t_cnt > 0 and c_cnt >= t_cnt:
+                execute_write("UPDATE kt_plans SET unlocked_on = COALESCE(unlocked_on, CURRENT_TIMESTAMP) WHERE id = %s", (plan_id,))
+    except Exception:
+        pass
+
 def get_meeting_attendance_rate(meeting_id):
     query = """
         SELECT 

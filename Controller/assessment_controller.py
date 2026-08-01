@@ -485,8 +485,13 @@ def get_attempt_details(asid):
 @assessment_bp.route('/plan/<int:plan_id>/settings', methods=['GET'])
 def get_plan_assessment_settings(plan_id):
     try:
-        query = "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
-        res = execute_query(query, (plan_id,))
+        try:
+            query = "SELECT is_final_unlocked, final_deadline_extension_days, unlocked_on FROM kt_plans WHERE id = %s"
+            res = execute_query(query, (plan_id,))
+        except Exception:
+            query = "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
+            res = execute_query(query, (plan_id,))
+
         if not res:
             return jsonify({"success": False, "message": "Plan not found"}), 404
         
@@ -496,11 +501,15 @@ def get_plan_assessment_settings(plan_id):
         if days is None:
             days = 90
             
+        unlocked_on_val = row.get('unlocked_on')
+        unlocked_on_str = unlocked_on_val.isoformat() if hasattr(unlocked_on_val, 'isoformat') else (str(unlocked_on_val) if unlocked_on_val else None)
+
         return jsonify({
             "success": True,
             "data": {
                 "is_final_unlocked": is_unlocked,
-                "final_deadline_extension_days": int(days)
+                "final_deadline_extension_days": int(days),
+                "unlocked_on": unlocked_on_str
             }
         }), 200
     except Exception:
@@ -508,7 +517,8 @@ def get_plan_assessment_settings(plan_id):
             "success": True,
             "data": {
                 "is_final_unlocked": False,
-                "final_deadline_extension_days": 90
+                "final_deadline_extension_days": 90,
+                "unlocked_on": None
             }
         }), 200
 
@@ -553,12 +563,41 @@ def update_plan_assessment_settings(plan_id):
                             "message": f"Invalid Deadline! Already {elapsed_days} day(s) have passed since plan completion. The new deadline window must be greater than {elapsed_days} day(s)."
                         }), 400
 
-        query = """
-            UPDATE kt_plans 
-            SET is_final_unlocked = %s, final_deadline_extension_days = %s
-            WHERE id = %s
-        """
-        execute_write(query, (is_unlocked, days, plan_id))
+        # Update settings and set unlocked_on timestamp if unlocked
+        try:
+            if is_unlocked or all_completed:
+                query = """
+                    UPDATE kt_plans 
+                    SET is_final_unlocked = %s, 
+                        final_deadline_extension_days = %s,
+                        unlocked_on = COALESCE(unlocked_on, CURRENT_TIMESTAMP)
+                    WHERE id = %s
+                """
+            else:
+                query = """
+                    UPDATE kt_plans 
+                    SET is_final_unlocked = %s, final_deadline_extension_days = %s
+                    WHERE id = %s
+                """
+            execute_write(query, (is_unlocked, days, plan_id))
+        except Exception:
+            # Fallback if unlocked_on column is not present yet
+            query = """
+                UPDATE kt_plans 
+                SET is_final_unlocked = %s, final_deadline_extension_days = %s
+                WHERE id = %s
+            """
+            execute_write(query, (is_unlocked, days, plan_id))
+
+        # Fetch updated unlocked_on value
+        unlocked_on_str = None
+        try:
+            res = execute_query("SELECT unlocked_on FROM kt_plans WHERE id = %s", (plan_id,))
+            if res and res[0].get('unlocked_on'):
+                v = res[0]['unlocked_on']
+                unlocked_on_str = v.isoformat() if hasattr(v, 'isoformat') else str(v)
+        except Exception:
+            pass
 
         # Trigger Final Assessment email reminder check if settings updated/unlocked
         try:
@@ -572,7 +611,8 @@ def update_plan_assessment_settings(plan_id):
             "message": "Manager assessment settings updated successfully.",
             "data": {
                 "is_final_unlocked": bool(is_unlocked),
-                "final_deadline_extension_days": days
+                "final_deadline_extension_days": days,
+                "unlocked_on": unlocked_on_str
             }
         }), 200
     except Exception as e:
