@@ -20,6 +20,7 @@ from Controller.google_auth_controller import google_auth_bp
 from Controller.leadership_controller import leadership_bp
 from Controller.holiday_controller import holiday_bp
 from Controller.chatbot2_controller import chatbot2_bp
+from Controller.user_integrations_controller import integrations_bp
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -67,6 +68,7 @@ def create_app():
     app.register_blueprint(leadership_bp, url_prefix="/api/leadership")
     app.register_blueprint(holiday_bp, url_prefix="/api/holidays")
     app.register_blueprint(chatbot2_bp, url_prefix="/api/chatbot2")
+    app.register_blueprint(integrations_bp, url_prefix="/api/integrations")
     
     @app.route("/api/health")
     def health():

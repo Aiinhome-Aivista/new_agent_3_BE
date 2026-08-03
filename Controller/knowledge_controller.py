@@ -141,35 +141,108 @@ def get_plan_documents(plan_id):
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
-def transcribe_audio_from_url(video_url):
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+def transcribe_audio_from_url(video_url, user_id=None):
+    import re
+    import requests
+    from db import execute_query
     
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'noplaylist': True
-    }
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     
     uid = str(uuid.uuid4())
     temp_folder = os.path.join(os.getcwd(), 'temp_audio_files')
     os.makedirs(temp_folder, exist_ok=True)
     
-    ydl_opts['outtmpl'] = os.path.join(temp_folder, f'temp_audio_{uid}.%(ext)s')
+    is_google_drive = "drive.google.com" in video_url
+    is_onedrive = "sharepoint.com" in video_url or "1drv.ms" in video_url or "onedrive.live.com" in video_url
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            ext = info.get('ext', 'm4a')
-    except Exception as e:
-        return f"Failed to extract audio from URL. Please ensure it is publicly accessible. Error: {e}"
+    temp_orig = None
+    ext = 'mp4' # Default fallback for API downloads
+    
+    if is_google_drive and user_id:
+        try:
+            file_id_match = re.search(r'/d/([^/]+)', video_url) or re.search(r'id=([^&]+)', video_url)
+            if not file_id_match:
+                return "Failed to extract audio. Could not parse Google Drive File ID."
+            file_id = file_id_match.group(1)
+            
+            users = execute_query("SELECT google_token FROM users WHERE id = %s", (user_id,))
+            if not users or not users[0].get('google_token'):
+                return "Failed to extract audio. Please connect your Google Drive account first."
+                
+            import json
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+            
+            token_data = json.loads(users[0]['google_token'])
+            creds = Credentials.from_authorized_user_info(token_data)
+            service = build('drive', 'v3', credentials=creds)
+            
+            request = service.files().get_media(fileId=file_id)
+            import io
+            from googleapiclient.http import MediaIoBaseDownload
+            temp_orig = os.path.join(temp_folder, f"temp_audio_{uid}.{ext}")
+            with io.FileIO(temp_orig, 'wb') as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+        except Exception as e:
+            if "insufficient permissions" in str(e).lower() or "forbidden" in str(e).lower() or "invalid_grant" in str(e).lower():
+                return "Failed to extract audio. Please reconnect your Google Drive account."
+            return f"Failed to extract audio from Google Drive: {e}"
+
+    elif is_onedrive and user_id:
+        try:
+            users = execute_query("SELECT ms_token FROM users WHERE id = %s", (user_id,))
+            if not users or not users[0].get('ms_token'):
+                return "Failed to extract audio. Please connect your Microsoft account first."
+                
+            import json
+            token_data = json.loads(users[0]['ms_token'])
+            access_token = token_data.get('access_token')
+            
+            import base64
+            encoded_url = base64.urlsafe_b64encode(video_url.encode()).decode().rstrip('=')
+            share_id = f"u!{encoded_url}"
+            graph_url = f"https://graph.microsoft.com/v1.0/shares/{share_id}/driveItem/content"
+            
+            headers = {'Authorization': f'Bearer {access_token}'}
+            resp = requests.get(graph_url, headers=headers, stream=True)
+            if resp.status_code == 200:
+                temp_orig = os.path.join(temp_folder, f"temp_audio_{uid}.{ext}")
+                with open(temp_orig, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            elif resp.status_code == 401 or resp.status_code == 403:
+                return "Failed to extract audio. Please reconnect your Microsoft account."
+            else:
+                return f"Failed to extract audio from OneDrive: HTTP {resp.status_code}"
+        except Exception as e:
+            return f"Failed to extract audio from OneDrive: {e}"
+
+    else:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True
+        }
+        ydl_opts['outtmpl'] = os.path.join(temp_folder, f'temp_audio_{uid}.%(ext)s')
         
-    temp_orig = os.path.join(temp_folder, f"temp_audio_{uid}.{ext}")
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                ext = info.get('ext', 'm4a')
+        except Exception as e:
+            return f"Failed to extract audio from URL. Please ensure it is publicly accessible. Error: {e}"
+            
+        temp_orig = os.path.join(temp_folder, f"temp_audio_{uid}.{ext}")
+        
     temp_wav = os.path.join(temp_folder, f"temp_audio_{uid}.wav")
     
     try:
         subprocess.run([ffmpeg_path, "-y", "-i", temp_orig, "-ac", "1", "-ar", "16000", temp_wav], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
-        if os.path.exists(temp_orig): os.remove(temp_orig)
+        if temp_orig and os.path.exists(temp_orig): os.remove(temp_orig)
         return f"Conversion failed: {e}"
         
     r = sr.Recognizer()
@@ -190,7 +263,7 @@ def transcribe_audio_from_url(video_url):
     except Exception as e:
         full_text = f"Transcription failed: {e}"
         
-    if os.path.exists(temp_orig): os.remove(temp_orig)
+    if temp_orig and os.path.exists(temp_orig): os.remove(temp_orig)
     if os.path.exists(temp_wav): os.remove(temp_wav)
     
     return full_text.strip()
@@ -203,10 +276,25 @@ def extract_transcript():
         
     url = data['url']
     
+    user_id = None
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            import jwt
+            from config import Config
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get('sub')
+        except Exception:
+            pass
+    
     try:
-        transcript_text = transcribe_audio_from_url(url)
+        transcript_text = transcribe_audio_from_url(url, user_id)
         if not transcript_text:
             transcript_text = "Could not transcribe audio (no speech detected)."
+            
+        if transcript_text.startswith("Failed to extract audio") or transcript_text.startswith("Conversion failed") or transcript_text.startswith("Transcription failed"):
+            return jsonify({"success": False, "message": transcript_text}), 400
             
         return jsonify({
             "success": True, 
