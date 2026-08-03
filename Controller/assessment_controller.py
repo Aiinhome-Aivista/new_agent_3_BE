@@ -565,7 +565,15 @@ def update_plan_assessment_settings(plan_id):
 
         # Update settings and set unlocked_on timestamp if unlocked
         try:
-            if is_unlocked or all_completed:
+            if is_unlocked:
+                query = """
+                    UPDATE kt_plans 
+                    SET is_final_unlocked = %s, 
+                        final_deadline_extension_days = %s,
+                        unlocked_on = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """
+            elif all_completed:
                 query = """
                     UPDATE kt_plans 
                     SET is_final_unlocked = %s, 
@@ -576,7 +584,9 @@ def update_plan_assessment_settings(plan_id):
             else:
                 query = """
                     UPDATE kt_plans 
-                    SET is_final_unlocked = %s, final_deadline_extension_days = %s
+                    SET is_final_unlocked = %s, 
+                        final_deadline_extension_days = %s,
+                        unlocked_on = NULL
                     WHERE id = %s
                 """
             execute_write(query, (is_unlocked, days, plan_id))
