@@ -7,12 +7,14 @@ chatbot_bp = Blueprint('chatbot_bp', __name__)
 @chatbot_bp.route('/ask', methods=['POST'])
 def ask_chatbot():
     data = request.json
-    required = ['session_id', 'question']
+    required = ['session_id', 'question', 'user_id', 'context_id']
     if not all(field in data for field in required):
         return jsonify({"success": False, "message": "Missing required fields"}), 400
         
     session_id = data['session_id']
     question = data['question']
+    user_id = data['user_id']
+    context_id = data['context_id']
     plan_id = data.get('plan_id')
     
     try:
@@ -51,18 +53,24 @@ def ask_chatbot():
                 answer = "I'm sorry, my generated response was blocked by security policies (potential PII leakage)."
         
         # Save to chat history
-        query = "INSERT INTO chat_history (session_id, question, answer) VALUES (%s, %s, %s)"
-        execute_write(query, (session_id, question, answer))
+        query = "INSERT INTO chat_history (session_id, question, answer, user_id, context_id) VALUES (%s, %s, %s, %s, %s)"
+        execute_write(query, (session_id, question, answer, user_id, context_id))
         
         return jsonify({"success": True, "data": {"answer": answer}}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
-@chatbot_bp.route('/history/<session_id>', methods=['GET'])
-def get_history(session_id):
+@chatbot_bp.route('/history', methods=['GET'])
+def get_history():
+    user_id = request.args.get('user_id')
+    context_id = request.args.get('context_id')
+    
+    if not user_id or not context_id:
+        return jsonify({"success": False, "message": "Missing user_id or context_id"}), 400
+
     try:
-        query = "SELECT * FROM chat_history WHERE session_id = %s ORDER BY created_at ASC"
-        history = execute_query(query, (session_id,))
+        query = "SELECT * FROM chat_history WHERE user_id = %s AND context_id = %s ORDER BY created_at ASC"
+        history = execute_query(query, (user_id, context_id))
         return jsonify({"success": True, "data": history}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

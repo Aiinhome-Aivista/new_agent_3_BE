@@ -14,7 +14,7 @@ def ask_chatbot2():
     data = request.json
     print(data)
 
-    required = ["session_id", "question"]
+    required = ["session_id", "question", "user_id", "context_id"]
 
     if not all(field in data for field in required):
         return jsonify({
@@ -24,6 +24,8 @@ def ask_chatbot2():
 
     session_id = data["session_id"]
     question = data["question"]
+    user_id = data["user_id"]
+    context_id = data["context_id"]
     current_date = datetime.now().strftime("%Y-%m-%d")
     sql = None
     try:
@@ -145,8 +147,8 @@ def ask_chatbot2():
                 answer = "Response blocked."
 
         execute_write(
-            "INSERT INTO chat_history(session_id,question,answer) VALUES(%s,%s,%s)",
-            (session_id, question, answer)
+            "INSERT INTO chat_history(session_id,question,answer,user_id,context_id) VALUES(%s,%s,%s,%s,%s)",
+            (session_id, question, answer, user_id, context_id)
         )
 
         print("Total Response Time:", time.time() - overall_start)
@@ -166,11 +168,17 @@ def ask_chatbot2():
             "message": str(e)
         }), 500
 
-@chatbot2_bp.route("/history/<session_id>", methods=["GET"])
-def get_history(session_id):
+@chatbot2_bp.route("/history", methods=["GET"])
+def get_history():
+    user_id = request.args.get("user_id")
+    context_id = request.args.get("context_id")
+    
+    if not user_id or not context_id:
+        return jsonify({"success": False, "message": "Missing user_id or context_id"}), 400
+
     try:
-        query = "SELECT * FROM chat_history WHERE session_id = %s ORDER BY created_at ASC"
-        history = execute_query(query, (session_id,))
+        query = "SELECT * FROM chat_history WHERE user_id = %s AND context_id = %s ORDER BY created_at ASC"
+        history = execute_query(query, (user_id, context_id))
         return jsonify({"success": True, "data": history}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
