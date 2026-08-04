@@ -24,7 +24,7 @@ class ConfluenceConnector:
     def __init__(self, base_url="https://confluence.example.com"):
         self.base_url = base_url
         self.authenticated = False
-        
+        ######
     def authenticate(self):
         # print(f"[CONFLUENCE] Authenticating to {self.base_url}")
         self.authenticated = True
