@@ -49,7 +49,7 @@ def create_app():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
     # Enable CORS
-    CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://localhost:5174"]}})
+    CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://localhost:5174", "http://187.127.163.17:3013"]}})
     
     # Register Blueprints
     app.register_blueprint(stakeholder_bp, url_prefix="/api/stakeholders")
@@ -84,4 +84,4 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=Config.FLASK_DEBUG, host="0.0.0.0", port=5000)
+    app.run(debug=Config.FLASK_DEBUG, host="0.0.0.0", port=3011)
