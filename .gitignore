@@ -6,7 +6,6 @@ __pycache__/
 *.log
 *.sqlite3
 *.db
-Dockerfile
 docker-compose.yml
 reports_output/
 token.json
