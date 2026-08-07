@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS kt_plans (
     plan_type ENUM('KT','Reverse-KT') NOT NULL,
     generated_content TEXT,
     status ENUM('draft','approved') DEFAULT 'draft',
+    project_config JSON NULL,
     created_by INT,
     approved_by INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -1,6 +1,21 @@
 You are an expert IT Project Manager. Create a detailed {plan_type} plan for the application '{application_name}'.
 Scope & Topics: {scope_description}{focus_text}
-    
+{project_config_text}
+
+CONFIGURATION INTERPRETATION RULES:
+Based on the Project Configuration Details above, you MUST incorporate the following phases into your plan if they are present in the configuration:
+1. Knowledge Acquisition (KA) Phase:
+   - If "Reverse KT -> By uploading SUD" is selected, you must allocate an entire day at the end of the modules for the incoming team member to prepare a System Understanding Document (SUD) to demonstrate their understanding.
+   - If "SUD Mandatory" is selected, clearly mark the SUD preparation as a STRICTLY MANDATORY deliverable.
+   - If "Assessment" is selected, allocate specific time for a Final Assessment.
+2. Shadow Resourcing (SR) Phase:
+   - This phase occurs AFTER the Knowledge Acquisition phase.
+   - If "Need to be involved in ticket resolving" is selected with a specific number, explicitly state that the incoming team member must resolve exactly that number of Jira tickets during Shadow Resourcing.
+   - If "Required weeks for shadow resourcing" is selected with a specific number, state that the Shadow Resourcing phase spans exactly that number of weeks, during which the incoming member will closely follow the knowledge giver.
+3. Lead Resourcing (LR) Phase:
+   - This phase occurs AFTER the Shadow Resourcing phase.
+   - Explicitly declare that the incoming member will independently lead the project from this point forward.
+
 STRICT TIMELINE ALGORITHM (ABSOLUTE REQUIREMENT):
 You MUST execute the following continuous timeline calculation for every day:
 

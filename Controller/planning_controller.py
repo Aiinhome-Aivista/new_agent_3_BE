@@ -41,9 +41,11 @@ def generate_plan():
         except Exception:
             pass # fallback to None if invalid token
     
+    project_config = data.get('project_config')
+    project_id = data.get('project_id')
     try:
         from services.plan_service import generate_plan_service
-        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus)
+        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus, project_config, project_id)
         
         return jsonify({
             "success": True, 
@@ -238,6 +240,18 @@ def close_plan(id):
             execute_write(query, (id,))
 
         return jsonify({"success": True, "message": "Plan closed successfully"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:plan_id>/link-project', methods=['PUT'])
+def link_project(plan_id):
+    data = request.json
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({"success": False, "message": "Missing project_id"}), 400
+    try:
+        execute_write("UPDATE kt_plans SET project_id = %s WHERE id = %s", (project_id, plan_id))
+        return jsonify({"success": True}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

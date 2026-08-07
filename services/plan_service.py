@@ -30,33 +30,32 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
     )
     return new_id
 
-def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None):
+def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None, project_config=None, project_id=None):
     created_by = None
     if user_email and user_full_name and user_role:
         created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
 
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
+    project_config_text = f"\n    Project Configuration Details:\n{json.dumps(project_config, indent=2)}" if project_config else ""
     
     prompt = load_prompt(
         "plan_generation.txt",
         plan_type=plan_type,
         application_name=application_name,
         scope_description=scope_description,
-        focus_text=focus_text
+        focus_text=focus_text,
+        project_config_text=project_config_text
     )
 
-
-
-    
     # Call LLM
     generated_content = call_llm(prompt)
     
     # Save to DB as draft
     query = """
-        INSERT INTO kt_plans (application_name, scope_description, plan_type, generated_content, status, created_by)
-        VALUES (%s, %s, %s, %s, 'draft', %s)
+        INSERT INTO kt_plans (application_name, scope_description, plan_type, generated_content, status, created_by, project_config, project_id)
+        VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s)
     """
-    params = (application_name, scope_description, plan_type, generated_content, created_by)
+    params = (application_name, scope_description, plan_type, generated_content, created_by, json.dumps(project_config) if project_config else None, project_id)
     plan_id = execute_write(query, params)
     
     # Extract topics
