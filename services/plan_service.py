@@ -72,15 +72,13 @@ def extract_and_save_topics(plan_id, generated_content):
     try:
         extraction_response = call_llm(extraction_prompt)
         
-        # strip markdown code block fences if present
+        import re
         clean_json = extraction_response.strip()
-        if clean_json.startswith("```json"):
-            clean_json = clean_json[7:]
-        if clean_json.startswith("```"):
-            clean_json = clean_json[3:]
-        if clean_json.endswith("```"):
-            clean_json = clean_json[:-3]
-        clean_json = clean_json.strip()
+        match = re.search(r'\[.*\]', clean_json, re.DOTALL)
+        if match:
+            clean_json = match.group(0)
+        else:
+            raise ValueError("No JSON array found in LLM response")
             
         topics = json.loads(clean_json)
         
