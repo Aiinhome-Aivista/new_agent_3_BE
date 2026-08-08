@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from services.project_service import create_project, get_projects, get_project_by_id
+from services.project_service import create_project, get_projects, get_project_by_id, update_project
 
 projects_bp = Blueprint('projects_bp', __name__)
 
@@ -25,3 +25,11 @@ def get_project(project_id):
     if result['success']:
         return jsonify(result), 200
     return jsonify(result), 404
+
+@projects_bp.route('/<int:project_id>', methods=['PUT'])
+def edit_project(project_id):
+    data = request.json
+    result = update_project(project_id, data)
+    if result['success']:
+        return jsonify(result), 200
+    return jsonify(result), 400

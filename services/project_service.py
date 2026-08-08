@@ -23,6 +23,26 @@ def create_project(data, user_id):
             cursor.close()
             conn.close()
 
+def update_project(project_id, data):
+    conn = get_connection()
+    if not conn:
+        return {"success": False, "message": "Database connection failed"}
+    try:
+        cursor = conn.cursor()
+        config = json.dumps(data)
+        
+        sql = "UPDATE kt_projects SET config = %s WHERE id = %s"
+        cursor.execute(sql, (config, project_id))
+        conn.commit()
+        return {"success": True, "data": {"id": project_id}}
+    except Exception as e:
+        print(f"Error updating project: {e}")
+        return {"success": False, "message": str(e)}
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
 def get_projects():
     conn = get_connection()
     if not conn:
