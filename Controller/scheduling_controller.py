@@ -930,3 +930,207 @@ def submit_meeting_feedback(id):
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+
+
+@scheduling_bp.route('/bulk-upload', methods=['POST'])
+def bulk_upload():
+    import pandas as pd
+    import random
+    try:
+        from services.notification_service import trigger_meeting_notifications
+        if 'files' not in request.files:
+            return jsonify({"success": False, "message": "No files uploaded."}), 400
+
+        files = request.files.getlist('files')
+        all_meeting_ids = []
+
+        for file in files:
+            if not file.filename.endswith(('.xls', '.xlsx')):
+                continue
+
+            df_meta = pd.read_excel(file, header=None, nrows=4)
+            project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
+            plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
+
+            project_name = project_name_str.split("Project Name: ")[1].strip() if "Project Name: " in str(project_name_str) else None
+            plan_name = plan_name_str.split("Plan Name: ")[1].strip() if "Plan Name: " in str(plan_name_str) else None
+
+            if not project_name or not plan_name:
+                return jsonify({"success": False, "message": "Could not find Project Name and Plan Name in the first rows."}), 400
+
+            project_res = execute_query("SELECT id FROM projects WHERE name = %s", (project_name,))
+            if not project_res:
+                return jsonify({"success": False, "message": f"Project '{project_name}' not found."}), 404
+            project_id = project_res[0]['id']
+
+            plan_res = execute_query("SELECT id FROM kt_plans WHERE application_name = %s AND project_id = %s", (plan_name, project_id))
+            if not plan_res:
+                return jsonify({"success": False, "message": f"Plan '{plan_name}' not found for this project."}), 404
+            plan_id = plan_res[0]['id']
+
+            file.seek(0)
+            df = pd.read_excel(file, skiprows=4)
+            df.columns = [str(c).strip() for c in df.columns]
+
+            if 'Day / Section' not in df.columns:
+                return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
+            
+            df['Day / Section'] = df['Day / Section'].ffill()
+
+            base_dt = datetime.now() + timedelta(days=1)
+            current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            holiday_query = "SELECT holiday_date FROM holidays"
+            holidays_result = execute_query(holiday_query, ())
+            holiday_dates = set()
+            if holidays_result:
+                for h in holidays_result:
+                    if isinstance(h['holiday_date'], str):
+                        holiday_dates.add(h['holiday_date'][:10])
+                    else:
+                        holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
+
+            grouped = df.groupby('Day / Section')
+            
+            all_stakeholder_ids = set()
+            for day_str, group in grouped:
+                day_str = str(day_str).strip()
+                if not day_str.lower().startswith('day'):
+                    continue
+
+                givers = group['Knowledge Giver'].dropna().astype(str).tolist() if 'Knowledge Giver' in df.columns else []
+                receivers = group['Knowledge Receiver'].dropna().astype(str).tolist() if 'Knowledge Receiver' in df.columns else []
+                
+                all_givers = set()
+                for g in givers:
+                    all_givers.update([x.strip() for x in g.split(',') if x.strip()])
+                    
+                all_receivers = set()
+                for r in receivers:
+                    all_receivers.update([x.strip() for x in r.split(',') if r.strip()])
+                    
+                stakeholder_ids = set()
+                all_names = list(all_givers) + list(all_receivers)
+                if all_names:
+                    format_strings = ','.join(['%s'] * len(all_names))
+                    sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(all_names))
+                    if sh_res:
+                        stakeholder_ids.update([row['id'] for row in sh_res])
+                        all_stakeholder_ids.update(stakeholder_ids)
+
+                topics = group['Topic / Sub-topic Name'].dropna().astype(str).tolist() if 'Topic / Sub-topic Name' in df.columns else []
+                description = "\n".join(topics)
+                
+                desired_hour = random.randint(10, 16)
+                desired_minute = random.choice([0, 15, 30, 45])
+                desired_start = desired_hour * 60 + desired_minute
+
+                scheduled = False
+                days_checked = 0
+                final_start = desired_start
+
+                while not scheduled and days_checked < 30:
+                    while current_day.weekday() > 4 or current_day.strftime('%Y-%m-%d') in holiday_dates:
+                        current_day += timedelta(days=1)
+                    
+                    if not stakeholder_ids:
+                        scheduled = True
+                    else:
+                        format_strings_sh = ','.join(['%s'] * len(stakeholder_ids))
+                        existing_query = f"""
+                            SELECT m.scheduled_at 
+                            FROM meetings m
+                            JOIN attendance a ON m.id = a.meeting_id
+                            WHERE a.stakeholder_id IN ({format_strings_sh})
+                              AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                        """
+                        day_start = current_day.strftime('%Y-%m-%d 00:00:00')
+                        day_end = (current_day + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
+                        params = tuple(list(stakeholder_ids) + [day_start, day_end])
+                        existing_meetings = execute_query(existing_query, params)
+
+                        existing_starts = []
+                        if existing_meetings:
+                            for row in existing_meetings:
+                                dt = row['scheduled_at']
+                                if isinstance(dt, str):
+                                    try:
+                                        if 'T' in dt:
+                                            dt = datetime.strptime(dt.replace('T', ' '), "%Y-%m-%d %H:%M:%S")
+                                        else:
+                                            dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+                                    except ValueError:
+                                        dt = datetime.fromisoformat(dt)
+                                existing_starts.append(dt.hour * 60 + dt.minute)
+
+                        has_overlap = False
+                        for ext_start in existing_starts:
+                            if abs(desired_start - ext_start) < 120:
+                                has_overlap = True
+                                break
+
+                        if not has_overlap:
+                            final_start = desired_start
+                            scheduled = True
+                        else:
+                            found_slot = False
+                            for slot in range(600, 1021, 15):
+                                slot_overlap = False
+                                for ext_start in existing_starts:
+                                    if abs(slot - ext_start) < 120:
+                                        slot_overlap = True
+                                        break
+                                if not slot_overlap:
+                                    final_start = slot
+                                    scheduled = True
+                                    found_slot = True
+                                    break
+                            
+                            if not found_slot:
+                                current_day += timedelta(days=1)
+                                days_checked += 1
+
+                if not scheduled:
+                    continue
+
+                hour = final_start // 60
+                minute = final_start % 60
+                current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                query = """
+                    INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link)
+                    VALUES (%s, %s, %s, %s, %s)
+                """
+                params = (
+                    plan_id, 
+                    f'{project_name} - {plan_name} - {day_str}', 
+                    formatted_date, 
+                    description,
+                    'https://meet.google.com/bulk-auto-generated'
+                )
+                meeting_id = execute_write(query, params)
+                all_meeting_ids.append(meeting_id)
+
+                for sh_id in stakeholder_ids:
+                    execute_write("INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)", (meeting_id, sh_id))
+
+                try:
+                    trigger_meeting_notifications(meeting_id)
+                except Exception as notify_err:
+                    print(f"Error triggering notifications for {meeting_id}: {notify_err}")
+
+                current_day += timedelta(days=1)
+
+            if all_stakeholder_ids:
+                format_strings = ','.join(['%s'] * len(all_stakeholder_ids))
+                update_sh_query = f"UPDATE stakeholders SET project_id = %s, plan_id = %s WHERE id IN ({format_strings})"
+                update_sh_params = [project_id, plan_id] + list(all_stakeholder_ids)
+                execute_write(update_sh_query, tuple(update_sh_params))
+
+        return jsonify({"success": True, "message": "Bulk scheduling successful!", "data": all_meeting_ids}), 201
+
+    except Exception as e:
+        print(f"Error in bulk_upload: {e}")
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
+
