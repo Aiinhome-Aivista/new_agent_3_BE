@@ -258,6 +258,19 @@ def create_meeting():
             # Advance to the next calendar day (time will be set fresh in next iteration)
             current_day += timedelta(days=1)
 
+        try:
+            plan_id = data['plan_id']
+            project_res = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id,))
+            project_id = project_res[0]['project_id'] if project_res else None
+            
+            if project_id and valid_stakeholder_ids:
+                format_strings = ','.join(['%s'] * len(valid_stakeholder_ids))
+                update_sh_query = f"UPDATE stakeholders SET project_id = %s, plan_id = %s WHERE id IN ({format_strings})"
+                update_sh_params = [project_id, plan_id] + list(valid_stakeholder_ids)
+                execute_write(update_sh_query, tuple(update_sh_params))
+        except Exception as upd_err:
+            print(f"Error updating stakeholders with project_id and plan_id: {upd_err}")
+
         return jsonify({
             "success": True, 
             "data": meeting_ids, 
