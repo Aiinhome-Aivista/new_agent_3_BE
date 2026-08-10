@@ -23,6 +23,8 @@ def add_stakeholder():
     email = data.get('email')
     name = data.get('name')
     role = data.get('role')
+    project_id = data.get('project_id')
+    track_name = data.get('track_name')
     
     # Step 1 – Duplicate Stakeholder Check (Highest Priority)
     logger.info("Checking Duplicate Stakeholder...")
@@ -49,8 +51,8 @@ def add_stakeholder():
         cursor = conn.cursor(dictionary=True)
         
         logger.info("Creating Stakeholder...")
-        insert_stakeholder_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
-        cursor.execute(insert_stakeholder_query, (name, email, role))
+        insert_stakeholder_query = "INSERT INTO stakeholders (name, email, role, project_id, track_name) VALUES (%s, %s, %s, %s, %s)"
+        cursor.execute(insert_stakeholder_query, (name, email, role, project_id, track_name))
         stakeholder_id = cursor.lastrowid
         logger.info("Stakeholder Created Successfully")
         
@@ -285,10 +287,10 @@ def get_all_stakeholders():
             elif role == 'PwC Leadership':
                 db_role = 'leadership'
                 
-            query = "SELECT * FROM stakeholders WHERE role = %s OR role = %s ORDER BY name ASC"
+            query = "SELECT stakeholders.*, kt_projects.name AS project_name FROM stakeholders LEFT JOIN kt_projects ON stakeholders.project_id = kt_projects.id WHERE role = %s OR role = %s ORDER BY name ASC"
             stakeholders = execute_query(query, (db_role, role))
         else:
-            query = "SELECT * FROM stakeholders"
+            query = "SELECT stakeholders.*, kt_projects.name AS project_name FROM stakeholders LEFT JOIN kt_projects ON stakeholders.project_id = kt_projects.id"
             stakeholders = execute_query(query)
         return jsonify({"success": True, "data": stakeholders}), 200
     except Exception as e:
@@ -297,7 +299,7 @@ def get_all_stakeholders():
 @stakeholder_bp.route('/<int:id>', methods=['GET'])
 def get_stakeholder(id):
     try:
-        query = "SELECT * FROM stakeholders WHERE id = %s"
+        query = "SELECT stakeholders.*, kt_projects.name AS project_name FROM stakeholders LEFT JOIN kt_projects ON stakeholders.project_id = kt_projects.id WHERE stakeholders.id = %s"
         stakeholders = execute_query(query, (id,))
         if not stakeholders:
             return jsonify({"success": False, "message": "Stakeholder not found"}), 404
