@@ -89,8 +89,6 @@ def add_stakeholder():
     email = data.get('email')
     name = data.get('name')
     role = data.get('role')
-    project_id = data.get('project_id')
-    track_name = data.get('track_name')
     
     # Step 1 – Duplicate Stakeholder Check (Highest Priority)
     logger.info("Checking Duplicate Stakeholder...")
@@ -117,8 +115,8 @@ def add_stakeholder():
         cursor = conn.cursor(dictionary=True)
         
         logger.info("Creating Stakeholder...")
-        insert_stakeholder_query = "INSERT INTO stakeholders (name, email, role, project_id, track_name) VALUES (%s, %s, %s, %s, %s)"
-        cursor.execute(insert_stakeholder_query, (name, email, role, project_id, track_name))
+        insert_stakeholder_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
+        cursor.execute(insert_stakeholder_query, (name, email, role))
         stakeholder_id = cursor.lastrowid
         logger.info("Stakeholder Created Successfully")
         
@@ -422,9 +420,7 @@ def upload_stakeholders():
     file = request.files['file']
     if file.filename == '':
         return jsonify({"success": False, "message": "No selected file"}), 400
-        
-    project_id = request.form.get('project_id')
-    track_name = request.form.get('track_name')
+
     
     try:
         import openpyxl
@@ -471,8 +467,8 @@ def upload_stakeholders():
             else:
                 conn = get_connection()
                 cursor = conn.cursor(dictionary=True)
-                insert_query = "INSERT INTO stakeholders (name, email, role, project_id, track_name) VALUES (%s, %s, %s, %s, %s)"
-                cursor.execute(insert_query, (name, email, role, project_id, track_name))
+                insert_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
+                cursor.execute(insert_query, (name, email, role))
                 stakeholder_id = cursor.lastrowid
                 
                 # Automatically create the user and send welcome email
