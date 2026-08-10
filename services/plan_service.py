@@ -248,3 +248,29 @@ def extract_plan_info_from_doc_service(files_input):
         "scope_description": extracted_scope
     }
 
+def recalculate_plan_timeline_service(plan_id, new_assessment_days):
+    """Save manager assessment days setting in project_config without modifying generated_content."""
+    try:
+        plan_res = execute_query("SELECT project_config FROM kt_plans WHERE id = %s", (plan_id,))
+        if not plan_res:
+            return
+        
+        proj_config = plan_res[0].get('project_config')
+        if proj_config and isinstance(proj_config, str):
+            try:
+                proj_config = json.loads(proj_config)
+            except Exception:
+                proj_config = {}
+        elif not isinstance(proj_config, dict):
+            proj_config = {}
+            
+        proj_config['final_deadline_extension_days'] = new_assessment_days
+
+        execute_write(
+            "UPDATE kt_plans SET project_config = %s WHERE id = %s",
+            (json.dumps(proj_config), plan_id)
+        )
+    except Exception as e:
+        logging.error(f"Error in recalculate_plan_timeline_service: {e}")
+
+

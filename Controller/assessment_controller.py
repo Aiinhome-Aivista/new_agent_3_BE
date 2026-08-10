@@ -616,6 +616,13 @@ def update_plan_assessment_settings(plan_id):
         except Exception:
             pass
 
+        # Recalculate plan timeline and topics when assessment window days are changed
+        try:
+            from services.plan_service import recalculate_plan_timeline_service
+            recalculate_plan_timeline_service(plan_id, days)
+        except Exception as e:
+            pass
+
         return jsonify({
             "success": True,
             "message": "Manager assessment settings updated successfully.",

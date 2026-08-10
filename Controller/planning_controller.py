@@ -111,13 +111,14 @@ def get_plans():
             
             if stakeholder_id:
                 if for_dropdown:
-                    query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status IN ('approved', 'closed') ORDER BY created_at DESC"
+                    query = "SELECT * FROM kt_plans WHERE (approved_by = %s OR approved_by IS NULL) AND status IN ('approved', 'closed') ORDER BY created_at DESC"
                     plans = execute_query(query, (stakeholder_id,))
                 else:
-                    query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s ORDER BY created_at DESC"
+                    query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s OR approved_by IS NULL ORDER BY created_at DESC"
                     plans = execute_query(query, (stakeholder_id, stakeholder_id))
             else:
-                plans = []
+                query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
+                plans = execute_query(query)
         else:
             query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
             plans = execute_query(query)
