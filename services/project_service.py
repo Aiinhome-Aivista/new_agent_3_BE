@@ -59,10 +59,14 @@ def get_projects():
         cursor.execute(sql)
         projects = cursor.fetchall()
         
-        # Parse JSON config
+        # Parse JSON config safely
         for proj in projects:
             if proj.get('config'):
-                proj['config'] = json.loads(proj['config'])
+                if isinstance(proj['config'], str):
+                    try:
+                        proj['config'] = json.loads(proj['config'])
+                    except Exception:
+                        pass
                 
         return {"success": True, "data": projects}
     except Exception as e:
@@ -86,11 +90,21 @@ def get_project_by_id(project_id):
             return {"success": False, "message": "Project not found"}
             
         if project.get('config'):
-            project['config'] = json.loads(project['config'])
+            if isinstance(project['config'], str):
+                try:
+                    project['config'] = json.loads(project['config'])
+                except Exception:
+                    pass
             
-        # Fetch associated plans
-        cursor.execute("SELECT id, application_name, plan_type, status, created_at FROM kt_plans WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
+        # Fetch associated plans instantly
+        cursor.execute("SELECT * FROM kt_plans WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
         plans = cursor.fetchall()
+        for p in plans:
+            if p.get('project_config') and isinstance(p['project_config'], str):
+                try:
+                    p['project_config'] = json.loads(p['project_config'])
+                except Exception:
+                    pass
         project['plans'] = plans
         
         return {"success": True, "data": project}
