@@ -81,7 +81,45 @@ def extract_and_save_topics(plan_id, generated_content):
             raise ValueError("No JSON array found in LLM response")
             
         topics = json.loads(clean_json)
-        
+
+        # Check if post-KA phases are present in extracted topics; if not, parse and append them cleanly
+        has_asmt = any('assessment' in str(t.get('day_label', '') + t.get('topic_name', '')).lower() for t in topics)
+        has_sr = any('shadow' in str(t.get('day_label', '') + t.get('topic_name', '')).lower() for t in topics)
+        has_lr = any('lead' in str(t.get('day_label', '') + t.get('topic_name', '')).lower() for t in topics)
+
+        if not (has_asmt and has_sr and has_lr):
+            asmt_match = re.search(r'Day\s+(\d+)\s+to\s+Day\s+(\d+):[^\n]*Final\s*Assessment[^\n]*\((\d+)\s*Days\)', generated_content, re.IGNORECASE)
+            sr_match = re.search(r'Day\s+(\d+)\s+to\s+Day\s+(\d+)[^\n]*Shadow\s*Resourcing', generated_content, re.IGNORECASE)
+            lr_match = re.search(r'Day\s+(\d+)\s+and\s+onwards', generated_content, re.IGNORECASE)
+
+            if asmt_match and not has_asmt:
+                d_start, d_end, d_cnt = asmt_match.group(1), asmt_match.group(2), int(asmt_match.group(3))
+                hrs = d_cnt * 24
+                topics.append({
+                    "day_label": f"Day {d_start} to Day {d_end}",
+                    "topic_name": "Mandatory Final Assessment Evaluation Window",
+                    "estimated_duration_hours": f"{hrs} Hours ({d_cnt} Days)"
+                })
+
+            if sr_match and not has_sr:
+                sr_start, sr_end = sr_match.group(1), sr_match.group(2)
+                sr_days = max(1, int(sr_end) - int(sr_start) + 1)
+                sr_weeks = max(1, sr_days // 7)
+                hrs = sr_days * 24
+                topics.append({
+                    "day_label": f"Day {sr_start} to Day {sr_end} (Shadow Phase)",
+                    "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution",
+                    "estimated_duration_hours": f"{hrs} Hours ({sr_days} Days / {sr_weeks} Weeks)"
+                })
+
+            if lr_match and not has_lr:
+                lr_start = lr_match.group(1)
+                topics.append({
+                    "day_label": f"Day {lr_start} onwards (Lead Phase)",
+                    "topic_name": "Independent Project Leadership & Transition Completion",
+                    "estimated_duration_hours": "Ongoing (Lead Phase)"
+                })
+
         # Clear existing topics if this is a resync
         execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
         
@@ -249,12 +287,13 @@ def extract_plan_info_from_doc_service(files_input):
     }
 
 def recalculate_plan_timeline_service(plan_id, new_assessment_days):
-    """Save manager assessment days setting in project_config without modifying generated_content."""
+    """Dynamically update plan markdown text and topics in DB when manager saves new assessment window days."""
     try:
-        plan_res = execute_query("SELECT project_config FROM kt_plans WHERE id = %s", (plan_id,))
-        if not plan_res:
+        plan_res = execute_query("SELECT generated_content, project_config FROM kt_plans WHERE id = %s", (plan_id,))
+        if not plan_res or not plan_res[0].get('generated_content'):
             return
         
+        content = plan_res[0]['generated_content']
         proj_config = plan_res[0].get('project_config')
         if proj_config and isinstance(proj_config, str):
             try:
@@ -266,10 +305,84 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             
         proj_config['final_deadline_extension_days'] = new_assessment_days
 
-        execute_write(
-            "UPDATE kt_plans SET project_config = %s WHERE id = %s",
-            (json.dumps(proj_config), plan_id)
+        # Knowledge Acquisition (KA) Phase ends at Day 15
+        ka_last_day = 15
+
+        asmt_start = ka_last_day + 1
+        asmt_end = ka_last_day + new_assessment_days
+        sr_start = asmt_end + 1
+        sr_end = sr_start + 13 # 2 weeks (14 days)
+        lr_start = sr_end + 1
+
+        # Replace Final Assessment Window section in markdown text cleanly
+        content = re.sub(
+            r'####?\s*Day\s+\d+\s+to\s+Day\s+\d+:[^\n]*Final\s*Assessment[^\n]*\((\d+)\s*Days\)',
+            f'#### Day {asmt_start} to Day {asmt_end}: Final Assessment Evaluation Window ({new_assessment_days} Days)',
+            content,
+            flags=re.IGNORECASE
         )
+        content = re.sub(
+            r'•\s*Mandatory\s*Final\s*Assessment\s*Evaluation\s*Window[^\n]*:\s*\d+\s*Days\.?',
+            f'• Mandatory Final Assessment Evaluation Window allocated by Manager: {new_assessment_days} Days.',
+            content,
+            flags=re.IGNORECASE
+        )
+
+        # Update SR Phase day range in content
+        content = re.sub(
+            r'####?\s*Day\s+\d+\s+to\s+Day\s+\d+[^\n]*Shadow\s*Resourcing[^\n]*',
+            f'#### Day {sr_start} to Day {sr_end} (Week 1-2: Shadow Resourcing Phase)',
+            content,
+            flags=re.IGNORECASE
+        )
+
+        # Update LR Phase day range in content
+        content = re.sub(
+            r'####?\s*Day\s+\d+\s+and\s+onwards:?',
+            f'#### Day {lr_start} and onwards:',
+            content,
+            flags=re.IGNORECASE
+        )
+
+        # Write updated content and project_config back to kt_plans table
+        execute_write(
+            "UPDATE kt_plans SET generated_content = %s, project_config = %s, final_deadline_extension_days = %s WHERE id = %s",
+            (content, json.dumps(proj_config), new_assessment_days, plan_id)
+        )
+
+        # Update or insert post-KA phase topics in plan_topics table directly (Instant SQL execution)
+        asmt_hrs = new_assessment_days * 24
+        asmt_label = f"Day {asmt_start} to Day {asmt_end}"
+        asmt_dur = f"{asmt_hrs} Hours ({new_assessment_days} Days)"
+
+        sr_days = 14
+        sr_hrs = sr_days * 24
+        sr_label = f"Day {sr_start} to Day {sr_end} (Shadow Phase)"
+        sr_dur = f"{sr_hrs} Hours ({sr_days} Days / 2 Weeks)"
+
+        lr_label = f"Day {lr_start} onwards (Lead Phase)"
+
+        # Check and update/insert Assessment topic row
+        asmt_row = execute_query("SELECT id FROM plan_topics WHERE plan_id = %s AND (topic_name LIKE '%%Assessment%%' OR day_label LIKE '%%Final Assessment%%')", (plan_id,))
+        if asmt_row:
+            execute_write("UPDATE plan_topics SET day_label = %s, estimated_duration_hours = %s WHERE id = %s", (asmt_label, asmt_dur, asmt_row[0]['id']))
+        else:
+            execute_write("INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)", (plan_id, asmt_label, "Mandatory Final Assessment Evaluation Window", asmt_dur))
+
+        # Check and update/insert Shadow Resourcing topic row
+        sr_row = execute_query("SELECT id FROM plan_topics WHERE plan_id = %s AND (topic_name LIKE '%%Shadow%%' OR day_label LIKE '%%Shadow%%')", (plan_id,))
+        if sr_row:
+            execute_write("UPDATE plan_topics SET day_label = %s, estimated_duration_hours = %s WHERE id = %s", (sr_label, sr_dur, sr_row[0]['id']))
+        else:
+            execute_write("INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)", (plan_id, sr_label, "Practical Shadow Experience & Hands-on Ticket Resolution", sr_dur))
+
+        # Check and update/insert Lead Resourcing topic row
+        lr_row = execute_query("SELECT id FROM plan_topics WHERE plan_id = %s AND (topic_name LIKE '%%Lead%%' OR day_label LIKE '%%Lead%%')", (plan_id,))
+        if lr_row:
+            execute_write("UPDATE plan_topics SET day_label = %s WHERE id = %s", (lr_label, lr_row[0]['id']))
+        else:
+            execute_write("INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)", (plan_id, lr_label, "Independent Project Leadership & Transition Completion", "Ongoing (Lead Phase)"))
+
     except Exception as e:
         logging.error(f"Error in recalculate_plan_timeline_service: {e}")
 

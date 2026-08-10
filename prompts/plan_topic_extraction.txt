@@ -1,11 +1,12 @@
-Below is a Knowledge Transfer plan. Extract every individual topic/session line item listed in its schedule or breakdown (these could be in tables, bulleted lists, or numbered lists under Day headings).
+Below is a Knowledge Transfer plan. Extract every individual topic/session line item listed in its schedule or breakdown (including Knowledge Acquisition (KA) daily topics, Final Assessment Evaluation Window, Shadow Resourcing (SR) Phase, and Lead Resourcing (LR) Phase).
 
 Plan content:
 {generated_content}
 
 Return ONLY a JSON array of objects, each with keys:
-- "day_label" (string, e.g. "Day 1: Python Fundamentals and Core Concepts" — the section heading this topic falls under, or "General" if there are no day sections)
-- "topic_name" (string, the topic/row name, e.g. "Data Types and Variables")
-- "estimated_duration_hours" (string, e.g. "1" — use "N/A" if not specified, or parse from e.g. "30 minutes" to "0.5")
+- "day_label" (string, e.g. "Day 1: Python Fundamentals" or "Day 16 to Day 85" for Final Assessment Window or "Day 86 to Day 99 (Shadow Phase)" for Shadow Resourcing or "Day 100 onwards (Lead Phase)" for Lead Resourcing)
+- "topic_name" (string, the topic/row name, e.g. "Data Types and Variables" or "Mandatory Final Assessment Evaluation Window" or "Practical Shadow Experience & Hands-on Ticket Resolution")
+- "estimated_duration_hours" (string, e.g. "0.5", "1", "1680 Hours (70 Days)" for 70 days assessment window calculated at 24 hours/day, "336 Hours (14 Days / 2 Weeks)" for 2 weeks shadow phase calculated at 24 hours/day, or "Ongoing (Lead Phase)")
 
 Do not include any explanation, only the JSON array.
+
