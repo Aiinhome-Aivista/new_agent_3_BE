@@ -271,6 +271,40 @@ def create_meeting():
         except Exception as upd_err:
             print(f"Error updating stakeholders with project_id and plan_id: {upd_err}")
 
+        try:
+            from services.notification_service import trigger_plan_requirements_notification
+            sud_recipients = data.get('sud_recipients', [])
+            shadow_recipients = data.get('shadow_recipients', [])
+            lead_recipients = data.get('lead_recipients', [])
+            
+            try:
+                plan_id_map = data['plan_id']
+                proj_q = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id_map,))
+                proj_id = proj_q[0]['project_id'] if proj_q else None
+                if proj_id:
+                    all_sh = set(sud_recipients + shadow_recipients + lead_recipients)
+                    for sh_id in all_sh:
+                        is_sudo = 1 if sh_id in sud_recipients else 0
+                        is_shadow = 1 if sh_id in shadow_recipients else 0
+                        is_lead = 1 if sh_id in lead_recipients else 0
+                        
+                        mapping_query = """
+                            INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE
+                                is_sudo = VALUES(is_sudo),
+                                is_shadow = VALUES(is_shadow),
+                                is_lead = VALUES(is_lead)
+                        """
+                        execute_write(mapping_query, (proj_id, plan_id_map, sh_id, is_sudo, is_shadow, is_lead))
+            except Exception as mapping_err:
+                print(f"Error updating resource_mapping: {mapping_err}")
+
+            if sud_recipients or shadow_recipients or lead_recipients:
+                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, shadow_recipients, lead_recipients)
+        except Exception as notify_req_err:
+            print(f"Error triggering requirements notification: {notify_req_err}")
+
         return jsonify({
             "success": True, 
             "data": meeting_ids, 

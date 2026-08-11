@@ -835,3 +835,124 @@ def _send_final_assessment_reminder_async(plan_id):
     except Exception as e:
         logger.error(f"Error in Final Assessment Reminder notification thread: {e}")
 
+
+
+def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_recipients, lead_recipients):
+    if not (sud_recipients or shadow_recipients or lead_recipients):
+        return
+    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_recipients, lead_recipients))
+    thread.daemon = True
+    thread.start()
+    logger.info(f"Spawned background plan requirements notification thread for plan ID: {plan_id}")
+
+def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_recipients, lead_recipients):
+    logger.info(f"Plan requirements notification thread started for plan ID: {plan_id}")
+    try:
+        from services.email_service import EmailService
+
+        plan_query = "SELECT application_name, project_id FROM kt_plans WHERE id = %s"
+        plan_res = execute_query(plan_query, (plan_id,))
+        if not plan_res or not plan_res[0].get('project_id'):
+            return
+            
+        app_name = plan_res[0]['application_name']
+        project_id = plan_res[0]['project_id']
+
+        proj_query = "SELECT name FROM kt_projects WHERE id = %s"
+        proj_res = execute_query(proj_query, (project_id,))
+        if not proj_res:
+            return
+
+        proj_name = proj_res[0]['name']
+
+        def fetch_stakeholders(ids):
+            if not ids:
+                return []
+            format_strings = ','.join(['%s'] * len(ids))
+            sh_query = f"SELECT id, name, email, role FROM stakeholders WHERE id IN ({format_strings}) AND email IS NOT NULL AND email != ''"
+            return execute_query(sh_query, tuple(ids))
+
+        def send_requirement_email(stakeholders, req_title, req_desc):
+            if not stakeholders:
+                return
+            
+            subject = f"{req_title} - {app_name}"
+            
+            for sh in stakeholders:
+                name = sh['name']
+                email = sh['email']
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f8; margin: 0; padding: 20px; }}
+    .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; padding: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e1e4e8; }}
+    .header {{ border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }}
+    .title {{ font-size: 20px; color: #1e3a8a; font-weight: bold; margin: 0; }}
+    .content-text {{ font-size: 14px; color: #333333; line-height: 1.6; margin-top: 15px; }}
+    .req-box {{ background-color: #f0fdfa; border: 1px solid #5eead4; border-radius: 8px; padding: 15px; margin: 20px 0; color: #0f766e; }}
+    .footer {{ font-size: 12px; color: #64748b; text-align: center; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 15px; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 class="title">Plan Requirement Update: {req_title}</h2>
+    </div>
+    <p class="content-text">Hello {name},</p>
+    <p class="content-text">This is a notification regarding a specific requirement for the plan <strong>{app_name}</strong> in the project <strong>{proj_name}</strong>.</p>
+    <div class="req-box">
+      <strong>{req_desc}</strong>
+    </div>
+    <p class="content-text">Please ensure you are prepared for this phase during the KT process.</p>
+    <div class="footer">
+      This is an automated notification from the PwC KT Manager application. Please do not reply directly to this email.
+    </div>
+  </div>
+</body>
+</html>"""
+                success = EmailService.send_html_email(email, subject, html_content)
+                if success:
+                    logger.info(f"{req_title} Email Sent: Recipient = {email}")
+                else:
+                    logger.error(f"{req_title} Email Failed: Recipient = {email}")
+
+        # Get last meeting date
+        last_meeting_q = "SELECT MAX(scheduled_at) as last_date FROM meetings WHERE plan_id = %s"
+        last_m = execute_query(last_meeting_q, (plan_id,))
+        last_date_str = "TBD"
+        if last_m and last_m[0].get('last_date'):
+            ld = last_m[0]['last_date']
+            import datetime
+            if isinstance(ld, str):
+                try:
+                    ld = datetime.datetime.fromisoformat(ld.replace('Z', ''))
+                except:
+                    pass
+            if hasattr(ld, 'strftime'):
+                last_date_str = ld.strftime("%B %d, %Y")
+
+        if sud_recipients:
+            sud_sh = fetch_stakeholders(sud_recipients)
+            send_requirement_email(sud_sh, "SUD Document Upload Mandatory", f"You are required to upload the SUD document after the last meeting date ({last_date_str}) for the plan {app_name}.")
+            
+        if shadow_recipients:
+            shadow_sh = fetch_stakeholders(shadow_recipients)
+            orgs = [s for s in shadow_sh if s['role'] in ('outgoing_sme', 'Outgoing SME (Knowledge Giver)')]
+            parts = [s for s in shadow_sh if s['role'] in ('incoming_member', 'Incoming Team Member (Knowledge Receiver)')]
+            
+            part_names = ", ".join([p['name'] for p in parts]) if parts else "Unknown Participants"
+            org_names = ", ".join([o['name'] for o in orgs]) if orgs else "Unknown Leads"
+            
+            if orgs:
+                send_requirement_email(orgs, "Shadow Resourcing Phase", f"You have been assigned as the lead for the shadow resources ({part_names}) for the plan {app_name}.")
+            if parts:
+                send_requirement_email(parts, "Shadow Resourcing Phase", f"You have been assigned as a shadow resource for the plan {app_name} under the leadership of {org_names}. This phase will begin after the last meeting date ({last_date_str}).")
+
+        if lead_recipients:
+            lead_sh = fetch_stakeholders(lead_recipients)
+            send_requirement_email(lead_sh, "Lead Resourcing Phase", f"You will be the lead resource after completion of shadow resourcing for the plan {app_name}.")
+
+    except Exception as e:
+        logger.error(f"Plan Requirements Notification error: {e}")
+
