@@ -769,9 +769,15 @@ def reschedule_meeting(id):
 
         if reschedule_subsequent:
             try:
-                from services.notification_service import trigger_reschedule_notifications
+                from services.notification_service import trigger_reschedule_notifications, trigger_plan_requirements_notification
                 for m_id, prop_dt in final_proposed_meetings:
                     trigger_reschedule_notifications(m_id, prop_dt, reason)
+                    
+                # Re-trigger shadow resourcing emails with the new last meeting date
+                shadow_mapping = execute_query("SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_shadow = 1", (plan_id,))
+                if shadow_mapping:
+                    shadow_recipients = [r['stakeholder_id'] for r in shadow_mapping]
+                    trigger_plan_requirements_notification(plan_id, [], shadow_recipients, [])
             except Exception as notify_err:
                 print(f"Error triggering reschedule notifications: {notify_err}")
             msg = f"Meeting and {len(subsequent_meetings)} subsequent meetings rescheduled successfully. Participants will be notified via email."
