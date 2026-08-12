@@ -276,32 +276,35 @@ def create_meeting():
             sud_recipients = data.get('sud_recipients', [])
             shadow_recipients = data.get('shadow_recipients', [])
             lead_recipients = data.get('lead_recipients', [])
+            final_assessment_recipients = data.get('final_assessment_recipients', [])
             
             try:
                 plan_id_map = data['plan_id']
                 proj_q = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id_map,))
                 proj_id = proj_q[0]['project_id'] if proj_q else None
                 if proj_id:
-                    all_sh = set(sud_recipients + shadow_recipients + lead_recipients)
+                    all_sh = set(sud_recipients + shadow_recipients + lead_recipients + final_assessment_recipients)
                     for sh_id in all_sh:
                         is_sudo = 1 if sh_id in sud_recipients else 0
                         is_shadow = 1 if sh_id in shadow_recipients else 0
                         is_lead = 1 if sh_id in lead_recipients else 0
+                        is_final_assessment = 1 if sh_id in final_assessment_recipients else 0
                         
                         mapping_query = """
-                            INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead, is_final_assessment)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             ON DUPLICATE KEY UPDATE
                                 is_sudo = VALUES(is_sudo),
                                 is_shadow = VALUES(is_shadow),
-                                is_lead = VALUES(is_lead)
+                                is_lead = VALUES(is_lead),
+                                is_final_assessment = VALUES(is_final_assessment)
                         """
-                        execute_write(mapping_query, (proj_id, plan_id_map, sh_id, is_sudo, is_shadow, is_lead))
+                        execute_write(mapping_query, (proj_id, plan_id_map, sh_id, is_sudo, is_shadow, is_lead, is_final_assessment))
             except Exception as mapping_err:
                 print(f"Error updating resource_mapping: {mapping_err}")
 
-            if sud_recipients or shadow_recipients or lead_recipients:
-                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, shadow_recipients, lead_recipients)
+            if sud_recipients or shadow_recipients or lead_recipients or final_assessment_recipients:
+                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients)
         except Exception as notify_req_err:
             print(f"Error triggering requirements notification: {notify_req_err}")
 
@@ -312,6 +315,55 @@ def create_meeting():
         }), 201
     except Exception as e:
         print(f"Error in create_meeting: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@scheduling_bp.route('/notify-requirements', methods=['POST'])
+def notify_requirements():
+    try:
+        data = request.json
+        plan_id = data.get('plan_id')
+        if not plan_id:
+            return jsonify({"success": False, "message": "Plan ID is required"}), 400
+
+        shadow_recipients = data.get('shadow_recipients', [])
+        lead_recipients = data.get('lead_recipients', [])
+
+        if not shadow_recipients and not lead_recipients:
+            return jsonify({"success": False, "message": "No recipients provided"}), 400
+
+        try:
+            proj_q = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id,))
+            proj_id = proj_q[0]['project_id'] if proj_q else None
+            if proj_id:
+                all_sh = set(shadow_recipients + lead_recipients)
+                for sh_id in all_sh:
+                    is_shadow = 1 if sh_id in shadow_recipients else 0
+                    is_lead = 1 if sh_id in lead_recipients else 0
+                    
+                    mapping_query = """
+                        INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead, is_final_assessment)
+                        VALUES (%s, %s, %s, 0, %s, %s, 0)
+                        ON DUPLICATE KEY UPDATE
+                            is_shadow = VALUES(is_shadow),
+                            is_lead = VALUES(is_lead)
+                    """
+                    execute_write(mapping_query, (proj_id, plan_id, sh_id, is_shadow, is_lead))
+        except Exception as mapping_err:
+            print(f"Error updating resource_mapping: {mapping_err}")
+
+        try:
+            from services.notification_service import trigger_plan_requirements_notification
+            trigger_plan_requirements_notification(plan_id, [], shadow_recipients, lead_recipients, [])
+        except Exception as notify_req_err:
+            print(f"Error triggering requirements notification: {notify_req_err}")
+
+        return jsonify({
+            "success": True, 
+            "message": "Requirements notifications initiated successfully."
+        }), 200
+
+    except Exception as e:
+        print(f"Error in notify_requirements: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @scheduling_bp.route('/meetings', methods=['GET'])

@@ -837,15 +837,15 @@ def _send_final_assessment_reminder_async(plan_id):
 
 
 
-def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_recipients, lead_recipients):
-    if not (sud_recipients or shadow_recipients or lead_recipients):
+def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients=None):
+    if not (sud_recipients or shadow_recipients or lead_recipients or final_assessment_recipients):
         return
-    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_recipients, lead_recipients))
+    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients))
     thread.daemon = True
     thread.start()
     logger.info(f"Spawned background plan requirements notification thread for plan ID: {plan_id}")
 
-def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_recipients, lead_recipients):
+def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients=None):
     logger.info(f"Plan requirements notification thread started for plan ID: {plan_id}")
     try:
         from services.email_service import EmailService
@@ -952,6 +952,10 @@ def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_r
         if lead_recipients:
             lead_sh = fetch_stakeholders(lead_recipients)
             send_requirement_email(lead_sh, "Lead Resourcing Phase", f"You will be the lead resource after completion of shadow resourcing for the plan {app_name}.")
+
+        if final_assessment_recipients:
+            fa_sh = fetch_stakeholders(final_assessment_recipients)
+            send_requirement_email(fa_sh, "Final Assessment Mandatory", f"You are required to complete the Final Assessment for the plan {app_name}.")
 
     except Exception as e:
         logger.error(f"Plan Requirements Notification error: {e}")
