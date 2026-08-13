@@ -21,6 +21,7 @@ from Controller.leadership_controller import leadership_bp
 from Controller.holiday_controller import holiday_bp
 from Controller.chatbot2_controller import chatbot2_bp
 from Controller.projects_controller import projects_bp
+from Controller.sud_controller import sud_bp
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -68,6 +69,7 @@ def create_app():
     app.register_blueprint(holiday_bp, url_prefix="/api/holidays")
     app.register_blueprint(chatbot2_bp, url_prefix="/api/chatbot2")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
+    app.register_blueprint(sud_bp, url_prefix="/api/sud")
     
     @app.route("/api/health")
     def health():
