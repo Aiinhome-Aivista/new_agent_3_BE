@@ -119,6 +119,38 @@ def get_plans():
             else:
                 query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
                 plans = execute_query(query)
+        elif user_role and ('incoming' in user_role.lower() or 'receiver' in user_role.lower()):
+            from services.plan_service import resolve_stakeholder_for_user
+            stakeholder_id = None
+            if user_email:
+                stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            
+            if stakeholder_id:
+                union_query = """
+                    SELECT DISTINCT plan_id FROM (
+                        SELECT m.plan_id FROM meetings m JOIN attendance a ON m.id = a.meeting_id WHERE a.stakeholder_id = %s AND m.plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM assessments WHERE stakeholder_id = %s AND plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM assessment_results WHERE stakeholder_id = %s AND plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM stakeholders WHERE id = %s AND plan_id IS NOT NULL
+                    ) AS user_plans
+                """
+                plan_rows = execute_query(union_query, (stakeholder_id, stakeholder_id, stakeholder_id, stakeholder_id))
+                assigned_plan_ids = [r['plan_id'] for r in plan_rows if r.get('plan_id')]
+
+                if assigned_plan_ids:
+                    format_strings = ','.join(['%s'] * len(assigned_plan_ids))
+                    if for_dropdown:
+                        query = f"SELECT * FROM kt_plans WHERE id IN ({format_strings}) AND status IN ('approved', 'closed') ORDER BY created_at DESC"
+                    else:
+                        query = f"SELECT * FROM kt_plans WHERE id IN ({format_strings}) ORDER BY created_at DESC"
+                    plans = execute_query(query, tuple(assigned_plan_ids))
+                else:
+                    plans = []
+            else:
+                plans = []
         else:
             query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
             plans = execute_query(query)
