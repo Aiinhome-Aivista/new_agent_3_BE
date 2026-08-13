@@ -6,7 +6,20 @@ projects_bp = Blueprint('projects_bp', __name__)
 @projects_bp.route('/', methods=['POST'])
 def add_project():
     data = request.json
-    user_id = 1 # Hardcoded for now as in planning_controller
+    user_id = 1 # Fallback
+    
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            import jwt
+            from config import Config
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            if payload.get('sub'):
+                user_id = payload.get('sub')
+        except Exception:
+            pass
+
     result = create_project(data, user_id)
     if result['success']:
         return jsonify(result), 201
