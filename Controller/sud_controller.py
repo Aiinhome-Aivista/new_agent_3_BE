@@ -22,6 +22,19 @@ def upload_sud_document():
         plan_id = int(plan_id)
     except ValueError:
         return jsonify({"success": False, "message": "Invalid plan_id"}), 400
+
+    # Enforce KA Phase 100% completion rule for SUD document upload
+    try:
+        from services.tracking_service import get_plan_summary_service
+        summary = get_plan_summary_service(plan_id)
+        ka_comp = summary.get('avg_completion_percent', 0)
+        if ka_comp < 100:
+            return jsonify({
+                "success": False,
+                "message": f"SUD Document Upload is locked. Knowledge Acquisition (KA) Phase must be 100% completed first (Current KA progress: {ka_comp}%)."
+            }), 400
+    except Exception:
+        pass
         
     stakeholder_id = 0
     auth_header = request.headers.get('Authorization')
