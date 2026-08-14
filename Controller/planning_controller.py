@@ -119,7 +119,7 @@ def get_plans():
             else:
                 query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
                 plans = execute_query(query)
-        elif user_role and ('incoming' in user_role.lower() or 'receiver' in user_role.lower()):
+        elif user_role and ('incoming' in user_role.lower() or 'receiver' in user_role.lower() or 'giver' in user_role.lower() or 'outgoing' in user_role.lower() or 'sme' in user_role.lower()):
             from services.plan_service import resolve_stakeholder_for_user
             stakeholder_id = None
             if user_email:
