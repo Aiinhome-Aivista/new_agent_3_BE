@@ -837,15 +837,15 @@ def _send_final_assessment_reminder_async(plan_id):
 
 
 
-def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients=None):
-    if not (sud_recipients or shadow_recipients or lead_recipients or final_assessment_recipients):
+def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None):
+    if not (sud_recipients or shadow_mappings or lead_recipients or final_assessment_recipients):
         return
-    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients))
+    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients))
     thread.daemon = True
     thread.start()
     logger.info(f"Spawned background plan requirements notification thread for plan ID: {plan_id}")
 
-def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_recipients, lead_recipients, final_assessment_recipients=None):
+def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None):
     logger.info(f"Plan requirements notification thread started for plan ID: {plan_id}")
     try:
         from services.email_service import EmailService
@@ -936,18 +936,26 @@ def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_r
             sud_sh = fetch_stakeholders(sud_recipients)
             send_requirement_email(sud_sh, "SUD Document Upload Mandatory", f"You are required to upload the SUD document after the last meeting date ({last_date_str}) for the plan {app_name}.")
             
-        if shadow_recipients:
-            shadow_sh = fetch_stakeholders(shadow_recipients)
-            orgs = [s for s in shadow_sh if s['role'] in ('outgoing_sme', 'Outgoing SME (Knowledge Giver)')]
-            parts = [s for s in shadow_sh if s['role'] in ('incoming_member', 'Incoming Team Member (Knowledge Receiver)')]
-            
-            part_names = ", ".join([p['name'] for p in parts]) if parts else "Unknown Participants"
-            org_names = ", ".join([o['name'] for o in orgs]) if orgs else "Unknown Leads"
-            
-            if orgs:
-                send_requirement_email(orgs, "Shadow Resourcing Phase", f"You have been assigned as the lead for the shadow resources ({part_names}) for the plan {app_name}.")
-            if parts:
-                send_requirement_email(parts, "Shadow Resourcing Phase", f"You have been assigned as a shadow resource for the plan {app_name} under the leadership of {org_names}. This phase will begin after the last meeting date ({last_date_str}).")
+        if shadow_mappings:
+            for mapping in shadow_mappings:
+                org_id = mapping.get('organizerId')
+                part_ids = mapping.get('participantIds', [])
+                
+                if org_id and part_ids:
+                    org_sh = fetch_stakeholders([org_id])
+                    parts_sh = fetch_stakeholders(part_ids)
+                    
+                    if not org_sh or not parts_sh:
+                        continue
+                        
+                    org = org_sh[0]
+                    part_names = ", ".join([p['name'] for p in parts_sh])
+                    
+                    # Email to organizer
+                    send_requirement_email([org], "Shadow Resourcing Phase", f"You have been assigned as the lead for the shadow resources ({part_names}) for the plan {app_name}.")
+                    
+                    # Email to participants
+                    send_requirement_email(parts_sh, "Shadow Resourcing Phase", f"You have been assigned as a shadow resource for the plan {app_name} under the leadership of {org['name']}. This phase will begin after the last meeting date ({last_date_str}).")
 
         if lead_recipients:
             lead_sh = fetch_stakeholders(lead_recipients)

@@ -154,6 +154,37 @@ def get_plans():
         else:
             query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
             plans = execute_query(query)
+        for p in plans:
+            pid = p['id']
+            try:
+                shadow_map = execute_query("SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_shadow = 1", (pid,))
+                p['shadow_stakeholder_ids'] = [r['stakeholder_id'] for r in shadow_map] if shadow_map else []
+            except Exception as e:
+                p['shadow_stakeholder_ids'] = []
+            
+            try:
+                eligible_query = """
+                    SELECT DISTINCT s.stakeholder_id
+                    FROM sud_documents s
+                    JOIN assessment_results ar ON s.stakeholder_id = ar.stakeholder_id AND s.plan_id = ar.plan_id
+                    WHERE s.plan_id = %s 
+                      AND ar.assessment_type = 'final' 
+                      AND ar.overall_score >= 40
+                """
+                eligible_map = execute_query(eligible_query, (pid,))
+                p['shadow_eligible_stakeholder_ids'] = [r['stakeholder_id'] for r in eligible_map] if eligible_map else []
+                
+                sud_map = execute_query("SELECT DISTINCT stakeholder_id FROM sud_documents WHERE plan_id = %s", (pid,))
+                p['sud_submitted_stakeholder_ids'] = [r['stakeholder_id'] for r in sud_map] if sud_map else []
+                
+                asmt_map = execute_query("SELECT DISTINCT stakeholder_id FROM assessment_results WHERE plan_id = %s AND assessment_type = 'final' AND overall_score >= 40", (pid,))
+                p['assessment_passed_stakeholder_ids'] = [r['stakeholder_id'] for r in asmt_map] if asmt_map else []
+                
+            except Exception as e:
+                print(f"Error fetching shadow eligible stakeholders for plan {pid}: {e}")
+                p['shadow_eligible_stakeholder_ids'] = []
+                p['sud_submitted_stakeholder_ids'] = []
+                p['assessment_passed_stakeholder_ids'] = []
 
         return jsonify({"success": True, "data": plans}), 200
     except Exception as e:

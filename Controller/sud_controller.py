@@ -110,8 +110,34 @@ def upload_sud_document():
 @sud_bp.route('/plan/<int:plan_id>', methods=['GET'])
 def get_sud_documents(plan_id):
     try:
-        query = "SELECT * FROM sud_documents WHERE plan_id = %s ORDER BY uploaded_at DESC"
-        docs = execute_query(query, (plan_id,))
+        user_role = None
+        stakeholder_id = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            try:
+                import jwt
+                from config import Config
+                payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+                user_email = payload.get('email')
+                user_role = payload.get('role')
+                user_id = payload.get('sub')
+                if user_id:
+                    stakeholder_id = int(user_id)
+                elif user_email:
+                    users = execute_query("SELECT id FROM users WHERE email = %s", (user_email,))
+                    if users:
+                        stakeholder_id = users[0]['id']
+            except Exception:
+                pass
+
+        if user_role and ('incoming' in user_role.lower() or 'receiver' in user_role.lower()) and stakeholder_id:
+            query = "SELECT * FROM sud_documents WHERE plan_id = %s AND stakeholder_id = %s ORDER BY uploaded_at DESC"
+            docs = execute_query(query, (plan_id, stakeholder_id))
+        else:
+            query = "SELECT * FROM sud_documents WHERE plan_id = %s ORDER BY uploaded_at DESC"
+            docs = execute_query(query, (plan_id,))
+
         formatted = []
         for d in docs:
             fp = d.get('file_path') or ''
