@@ -400,6 +400,32 @@ def notify_requirements():
         print(f"Error in notify_requirements: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+@scheduling_bp.route('/resource-mappings', methods=['GET'])
+def get_resource_mappings():
+    plan_id = request.args.get('plan_id')
+    if not plan_id:
+        return jsonify({"success": False, "message": "plan_id is required"}), 400
+        
+    try:
+        query = """
+            SELECT 
+                rm.stakeholder_id as participant_id,
+                ps.name as participant_name,
+                ps.role as participant_role,
+                rm.lead_organizer_id as organizer_id,
+                os.name as organizer_name,
+                os.role as organizer_role
+            FROM resource_mapping rm
+            LEFT JOIN stakeholders ps ON rm.stakeholder_id = ps.id
+            LEFT JOIN stakeholders os ON rm.lead_organizer_id = os.id
+            WHERE rm.plan_id = %s AND rm.is_shadow = 1 AND rm.lead_organizer_id IS NOT NULL
+        """
+        results = execute_query(query, (plan_id,))
+        return jsonify({"success": True, "data": results}), 200
+    except Exception as e:
+        print(f"Error fetching resource mappings: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @scheduling_bp.route('/meetings', methods=['GET'])
 def get_meetings():
     plan_id = request.args.get('plan_id')
