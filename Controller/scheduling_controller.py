@@ -1083,6 +1083,7 @@ def submit_meeting_feedback(id):
 def bulk_upload():
     import pandas as pd
     import random
+    from datetime import datetime, timedelta
     try:
         from services.notification_service import trigger_meeting_notifications
         if 'files' not in request.files:
@@ -1100,12 +1101,14 @@ def bulk_upload():
             plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
 
             project_name = project_name_str.split("Project Name: ")[1].strip() if "Project Name: " in str(project_name_str) else None
-            plan_name = plan_name_str.split("Plan Name: ")[1].strip() if "Plan Name: " in str(plan_name_str) else None
+            plan_name_raw = plan_name_str.split("Plan Name: ")[1].strip() if "Plan Name: " in str(plan_name_str) else None
+            import re
+            plan_name = re.sub(r'\s*\([^)]*\)$', '', plan_name_raw).strip() if plan_name_raw else None
 
             if not project_name or not plan_name:
                 return jsonify({"success": False, "message": "Could not find Project Name and Plan Name in the first rows."}), 400
 
-            project_res = execute_query("SELECT id FROM projects WHERE name = %s", (project_name,))
+            project_res = execute_query("SELECT id FROM kt_projects WHERE name = %s", (project_name,))
             if not project_res:
                 return jsonify({"success": False, "message": f"Project '{project_name}' not found."}), 404
             project_id = project_res[0]['id']
@@ -1116,7 +1119,7 @@ def bulk_upload():
             plan_id = plan_res[0]['id']
 
             file.seek(0)
-            df = pd.read_excel(file, skiprows=4)
+            df = pd.read_excel(file, skiprows=5)
             df.columns = [str(c).strip() for c in df.columns]
 
             if 'Day / Section' not in df.columns:
@@ -1148,6 +1151,21 @@ def bulk_upload():
                 givers = group['Knowledge Giver'].dropna().astype(str).tolist() if 'Knowledge Giver' in df.columns else []
                 receivers = group['Knowledge Receiver'].dropna().astype(str).tolist() if 'Knowledge Receiver' in df.columns else []
                 
+                start_dates = group['Start Date'].dropna().astype(str).tolist() if 'Start Date' in df.columns else []
+                meeting_links = group['Meeting Link'].dropna().astype(str).tolist() if 'Meeting Link' in df.columns else []
+                
+                custom_start_date = None
+                for sd in start_dates:
+                    if sd.strip() and sd.strip().lower() != 'nan':
+                        custom_start_date = sd.strip()
+                        break
+                        
+                custom_meeting_link = None
+                for ml in meeting_links:
+                    if ml.strip() and ml.strip().lower() != 'nan':
+                        custom_meeting_link = ml.strip()
+                        break
+
                 all_givers = set()
                 for g in givers:
                     all_givers.update([x.strip() for x in g.split(',') if x.strip()])
@@ -1240,10 +1258,23 @@ def bulk_upload():
                 if not scheduled:
                     continue
 
-                hour = final_start // 60
-                minute = final_start % 60
-                current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+                if custom_start_date:
+                    try:
+                        from dateutil import parser
+                        custom_dt = parser.parse(custom_start_date)
+                        formatted_date = custom_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        hour = final_start // 60
+                        minute = final_start % 60
+                        current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                        formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    hour = final_start // 60
+                    minute = final_start % 60
+                    current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                final_meeting_link = custom_meeting_link if custom_meeting_link else 'https://meet.google.com/bulk-auto-generated'
 
                 query = """
                     INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link)
@@ -1254,7 +1285,7 @@ def bulk_upload():
                     f'{project_name} - {plan_name} - {day_str}', 
                     formatted_date, 
                     description,
-                    'https://meet.google.com/bulk-auto-generated'
+                    final_meeting_link
                 )
                 meeting_id = execute_write(query, params)
                 all_meeting_ids.append(meeting_id)
