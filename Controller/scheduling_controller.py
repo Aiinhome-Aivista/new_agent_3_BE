@@ -1139,10 +1139,11 @@ def bulk_upload():
                 return jsonify({"success": False, "message": f"Project '{project_name}' not found."}), 404
             project_id = project_res[0]['id']
 
-            plan_res = execute_query("SELECT id FROM kt_plans WHERE application_name = %s AND project_id = %s", (plan_name, project_id))
+            plan_res = execute_query("SELECT id, project_config FROM kt_plans WHERE application_name = %s AND project_id = %s", (plan_name, project_id))
             if not plan_res:
                 return jsonify({"success": False, "message": f"Plan '{plan_name}' not found for this project."}), 404
             plan_id = plan_res[0]['id']
+            project_config = plan_res[0].get('project_config')
 
             file.seek(0)
             df = pd.read_excel(file, skiprows=5)
@@ -1331,6 +1332,87 @@ def bulk_upload():
                 update_sh_query = f"UPDATE stakeholders SET project_id = %s, plan_id = %s WHERE id IN ({format_strings})"
                 update_sh_params = [project_id, plan_id] + list(all_stakeholder_ids)
                 execute_write(update_sh_query, tuple(update_sh_params))
+
+            import json
+            is_sud_mandatory = False
+            is_assessment_mandatory = False
+            
+            if isinstance(project_config, str):
+                try:
+                    project_config_dict = json.loads(project_config)
+                except Exception:
+                    project_config_dict = {}
+            elif isinstance(project_config, dict):
+                project_config_dict = project_config
+            else:
+                project_config_dict = {}
+                
+            for t in project_config_dict.get('tracks', []):
+                opts = t.get('options', {})
+                if opts.get('sud_mandatory'):
+                    is_sud_mandatory = True
+                if opts.get('assessment') or opts.get('final_assessment_mandatory'):
+                    is_assessment_mandatory = True
+
+            sud_names = set()
+            assessment_names = set()
+            
+            col_sud = None
+            for c in df.columns:
+                if c.strip().lower() in ['sud document', 'sud']:
+                    col_sud = c
+                    break
+                    
+            if col_sud:
+                for val in df[col_sud].dropna().astype(str):
+                    sud_names.update([x.strip() for x in val.split(',') if x.strip() and x.strip().lower() != 'nan'])
+
+            col_ass = None
+            for c in df.columns:
+                if c.strip().lower() in ['assessment', 'final assessment']:
+                    col_ass = c
+                    break
+
+            if col_ass:
+                for val in df[col_ass].dropna().astype(str):
+                    assessment_names.update([x.strip() for x in val.split(',') if x.strip() and x.strip().lower() != 'nan'])
+
+            sud_recipients = []
+            final_assessment_recipients = []
+            
+            if is_sud_mandatory and sud_names:
+                format_strings = ','.join(['%s'] * len(sud_names))
+                sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(sud_names))
+                if sh_res:
+                    sud_recipients = [row['id'] for row in sh_res]
+                    
+            if is_assessment_mandatory and assessment_names:
+                format_strings = ','.join(['%s'] * len(assessment_names))
+                sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(assessment_names))
+                if sh_res:
+                    final_assessment_recipients = [row['id'] for row in sh_res]
+
+            if sud_recipients or final_assessment_recipients:
+                from services.notification_service import trigger_plan_requirements_notification
+                
+                all_req_sh = set(sud_recipients + final_assessment_recipients)
+                for sh_id in all_req_sh:
+                    is_sudo = 1 if sh_id in sud_recipients else 0
+                    is_final_assessment = 1 if sh_id in final_assessment_recipients else 0
+                    
+                    mapping_query = """
+                        INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_final_assessment)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            is_sudo = VALUES(is_sudo),
+                            is_final_assessment = VALUES(is_final_assessment)
+                    """
+                    execute_write(mapping_query, (project_id, plan_id, sh_id, is_sudo, is_final_assessment))
+                
+                try:
+                    trigger_plan_requirements_notification(plan_id, sud_recipients, [], [], final_assessment_recipients)
+                except Exception as notify_req_err:
+                    print(f"Error triggering requirements notification in bulk upload: {notify_req_err}")
 
         return jsonify({"success": True, "message": "Bulk scheduling successful!", "data": all_meeting_ids}), 201
 
