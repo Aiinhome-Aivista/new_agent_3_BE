@@ -576,10 +576,29 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             
         proj_config['final_deadline_extension_days'] = new_assessment_days
 
-        # Dynamically determine ka_last_day strictly from the KA phase section (before Final Assessment header)
-        ka_content_part = re.split(r'####?\s*Final\s*Assessment', content, flags=re.IGNORECASE)[0]
-        content_day_matches = re.findall(r'Day\s+(\d+)', ka_content_part, re.IGNORECASE)
-        ka_last_day = max(int(m) for m in content_day_matches) if content_day_matches else 10
+        # 1. Dynamically determine ka_last_day from DB plan_topics (checking KA rows ONLY)
+        ka_last_day = 1
+        ka_rows = execute_query(
+            "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s",
+            (plan_id,)
+        )
+        if ka_rows:
+            for r in ka_rows:
+                lbl = str(r.get('day_label', ''))
+                tname = str(r.get('topic_name', ''))
+                full_str = (lbl + ' ' + tname).lower()
+                if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
+                    continue
+                matches = re.findall(r'Day\s+(\d+)', lbl, re.IGNORECASE)
+                for m in matches:
+                    ka_last_day = max(ka_last_day, int(m))
+
+        # Fallback to ka_content_part in markdown if plan_topics yielded nothing
+        if ka_last_day == 1 and content:
+            ka_content_part = re.split(r'####?\s*Final\s*Assessment', content, flags=re.IGNORECASE)[0]
+            content_day_matches = re.findall(r'Day\s+(\d+)', ka_content_part, re.IGNORECASE)
+            if content_day_matches:
+                ka_last_day = max(int(m) for m in content_day_matches)
 
         asmt_start = ka_last_day + 1
         asmt_end = ka_last_day + new_assessment_days
@@ -587,8 +606,7 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
         sr_end = sr_start + 13 # 14 days
         lr_start = sr_end + 1
 
-        # Reconstruct the 3 Post-KA Phase blocks cleanly and unambiguously
-        # 1. Update Final Assessment Window block
+        # 2. Reconstruct the 3 Post-KA Phase blocks in Markdown text cleanly
         def update_asmt_block(m):
             header = m.group(1)
             block = m.group(2)
@@ -613,7 +631,6 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             flags=re.IGNORECASE
         )
 
-        # 2. Update Shadow Resourcing Phase block
         def update_sr_block(m):
             header = m.group(1)
             block = m.group(2)
@@ -632,7 +649,6 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             flags=re.IGNORECASE
         )
 
-        # 3. Update Lead Resourcing Phase block
         def update_lr_block(m):
             header = m.group(1)
             block = m.group(2)
@@ -657,12 +673,43 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             (content, json.dumps(proj_config), new_assessment_days, plan_id)
         )
 
-        # Re-sync topics table instantly using deterministic Python parser without slow LLM calls
-        topics = parse_topics_directly_from_content(content)
-        execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
-        for item in topics:
-            query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
-            execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
+        # 3. Super-Safe DB Update for plan_topics table:
+        # KA Phase rows in plan_topics table are 100% UNTOUCHED!
+        # Delete ONLY the 3 Post-KA phase rows and re-insert updated Post-KA rows cleanly.
+        execute_write(
+            """DELETE FROM plan_topics 
+               WHERE plan_id = %s 
+               AND (LOWER(topic_name) LIKE %s 
+                    OR LOWER(topic_name) LIKE %s 
+                    OR LOWER(topic_name) LIKE %s
+                    OR LOWER(day_label) LIKE %s
+                    OR LOWER(day_label) LIKE %s)""",
+            (plan_id, '%assessment%', '%shadow%', '%lead%', '%shadow%', '%lead%')
+        )
+
+        asmt_hrs = new_assessment_days * 24
+        asmt_label = f"Day {asmt_start} to Day {asmt_end}"
+        asmt_dur = f"{asmt_hrs} Hours ({new_assessment_days} Days)"
+
+        sr_days = 14
+        sr_hrs = sr_days * 24
+        sr_label = f"Day {sr_start} to Day {sr_end} (Shadow Phase)"
+        sr_dur = f"{sr_hrs} Hours ({sr_days} Days / 2 Weeks)"
+
+        lr_label = f"Day {lr_start} onwards (Lead Phase)"
+
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, asmt_label, "Mandatory Final Assessment Evaluation Window", asmt_dur)
+        )
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, sr_label, "Practical Shadow Experience & Hands-on Ticket Resolution", sr_dur)
+        )
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, lr_label, "Independent Project Leadership & Transition Completion", "Ongoing (Lead Phase)")
+        )
 
     except Exception as e:
         logging.error(f"Error in recalculate_plan_timeline_service: {e}")
