@@ -1112,6 +1112,14 @@ def bulk_upload():
     from datetime import datetime, timedelta
     try:
         from services.notification_service import trigger_meeting_notifications
+        
+        organizer_id = None
+        try:
+            user_info = get_authenticated_user()
+            organizer_id = user_info['sub']
+        except Exception as e:
+            print(f"Auth error in bulk upload: {e}")
+
         if 'files' not in request.files:
             return jsonify({"success": False, "message": "No files uploaded."}), 400
 
@@ -1153,6 +1161,9 @@ def bulk_upload():
                 return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
             
             df['Day / Section'] = df['Day / Section'].ffill()
+            
+            if 'Meeting Link' in df.columns:
+                df['Meeting Link'] = df['Meeting Link'].ffill()
 
             base_dt = datetime.now() + timedelta(days=1)
             current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1304,15 +1315,16 @@ def bulk_upload():
                 final_meeting_link = custom_meeting_link if custom_meeting_link else 'https://meet.google.com/bulk-auto-generated'
 
                 query = """
-                    INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link, organizer_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 params = (
                     plan_id, 
                     f'{project_name} - {plan_name} - {day_str}', 
                     formatted_date, 
                     description,
-                    final_meeting_link
+                    final_meeting_link,
+                    organizer_id
                 )
                 meeting_id = execute_write(query, params)
                 all_meeting_ids.append(meeting_id)
