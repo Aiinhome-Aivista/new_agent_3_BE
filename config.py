@@ -17,6 +17,13 @@ class Config:
     
     LLM_API_URL = os.getenv("LLM_API_URL", "http://122.163.121.176:3041/api/generate")
     LLM_MODEL = os.getenv("LLM_MODEL", "mistral-small:24b")
+    LLM_CONNECT_TIMEOUT = max(1, int(os.getenv("LLM_CONNECT_TIMEOUT", "10")))
+    LLM_READ_TIMEOUT = max(1, int(os.getenv("LLM_READ_TIMEOUT", "300")))
+    LLM_MAX_RETRIES = max(0, int(os.getenv("LLM_MAX_RETRIES", "0")))
+    LLM_KEEP_ALIVE = os.getenv("LLM_KEEP_ALIVE", "30m").strip()
+    CHATBOT3_ANSWER_CHUNK_ROWS = max(
+        5, int(os.getenv("CHATBOT3_ANSWER_CHUNK_ROWS", "30"))
+    )
     
     # SMTP Email Configuration
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
