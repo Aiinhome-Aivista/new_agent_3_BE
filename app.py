@@ -19,7 +19,7 @@ from Controller.guardrails_controller import guardrails_bp
 from Controller.google_auth_controller import google_auth_bp
 from Controller.leadership_controller import leadership_bp
 from Controller.holiday_controller import holiday_bp
-from Controller.chatbot2_controller import chatbot2_bp
+from Controller.chatbot3_controller import chatbot3_bp
 from Controller.projects_controller import projects_bp
 from Controller.sud_controller import sud_bp
 from opentelemetry import trace
@@ -67,7 +67,7 @@ def create_app():
     app.register_blueprint(google_auth_bp, url_prefix="/auth/google")
     app.register_blueprint(leadership_bp, url_prefix="/api/leadership")
     app.register_blueprint(holiday_bp, url_prefix="/api/holidays")
-    app.register_blueprint(chatbot2_bp, url_prefix="/api/chatbot2")
+    app.register_blueprint(chatbot3_bp, url_prefix="/api/chatbot3")
     app.register_blueprint(projects_bp, url_prefix="/api/projects")
     app.register_blueprint(sud_bp, url_prefix="/api/sud")
     
