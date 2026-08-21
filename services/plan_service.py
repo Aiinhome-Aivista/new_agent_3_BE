@@ -30,33 +30,32 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
     )
     return new_id
 
-def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None):
+def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None, project_config=None, project_id=None):
     created_by = None
     if user_email and user_full_name and user_role:
         created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
 
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
+    project_config_text = f"\n    Project Configuration Details:\n{json.dumps(project_config, indent=2)}" if project_config else ""
     
     prompt = load_prompt(
         "plan_generation.txt",
         plan_type=plan_type,
         application_name=application_name,
         scope_description=scope_description,
-        focus_text=focus_text
+        focus_text=focus_text,
+        project_config_text=project_config_text
     )
 
-
-
-    
     # Call LLM
     generated_content = call_llm(prompt)
     
     # Save to DB as draft
     query = """
-        INSERT INTO kt_plans (application_name, scope_description, plan_type, generated_content, status, created_by)
-        VALUES (%s, %s, %s, %s, 'draft', %s)
+        INSERT INTO kt_plans (application_name, scope_description, plan_type, generated_content, status, created_by, project_config, project_id)
+        VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s)
     """
-    params = (application_name, scope_description, plan_type, generated_content, created_by)
+    params = (application_name, scope_description, plan_type, generated_content, created_by, json.dumps(project_config) if project_config else None, project_id)
     plan_id = execute_write(query, params)
     
     # Extract topics
@@ -69,35 +68,342 @@ def generate_plan_service(application_name, scope_description, plan_type, user_e
     }
 
 def extract_and_save_topics(plan_id, generated_content):
-    extraction_prompt = load_prompt("plan_topic_extraction.txt", generated_content=generated_content)
-    try:
-        extraction_response = call_llm(extraction_prompt)
-        
-        # strip markdown code block fences if present
-        clean_json = extraction_response.strip()
-        if clean_json.startswith("```json"):
-            clean_json = clean_json[7:]
-        if clean_json.startswith("```"):
-            clean_json = clean_json[3:]
-        if clean_json.endswith("```"):
-            clean_json = clean_json[:-3]
-        clean_json = clean_json.strip()
+    """Extract and save topics into plan_topics DB table using deterministic parser."""
+    topics = parse_topics_directly_from_content(generated_content)
+    execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
+    count = 0
+    for item in topics:
+        query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
+        execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
+        count += 1
+    return count
+
+def parse_topics_directly_from_content(generated_content):
+    """Deterministic Python parser that reads markdown text directly to extract all sub-topic rows."""
+    import re
+    topics = []
+    
+    # Split content by Day headers or Post-KA H4 headers
+    day_blocks = re.split(r'\n(?=Day\s+\d+:|####\s*Final\s*Assessment|####\s*Shadow\s*Resourcing|####\s*Lead\s*Resourcing)', generated_content, flags=re.IGNORECASE)
+    
+    ka_last_day = 1
+    
+    for block in day_blocks:
+        block_strip = block.strip()
+        day_match = re.match(r'^(Day\s+(\d+)[^\n]*)', block_strip, re.IGNORECASE)
+        if not day_match:
+            continue
             
-        topics = json.loads(clean_json)
+        full_day_header = day_match.group(1).strip()
+        day_num = int(day_match.group(2))
         
-        # Clear existing topics if this is a resync
+        # Skip if this is a post-KA phase header wrongly formatted as Day X
+        if 'assessment' in block_strip.lower() or 'shadow' in block_strip.lower() or 'lead' in block_strip.lower():
+            continue
+            
+        ka_last_day = max(ka_last_day, day_num)
+        
+        # Find all bullet lines: • Sub-topic Name (N minutes)
+        bullet_matches = re.findall(r'[•\*]\s*([^\n\(]+?)\s*\((?:Part\s+\d+\s*-\s*)?(\d+)\s*minutes?\)', block_strip, re.IGNORECASE)
+        
+        if bullet_matches:
+            for sub_name, mins_str in bullet_matches:
+                sub_name_clean = sub_name.strip()
+                if 'daily total' in sub_name_clean.lower() or 'timeline:' in sub_name_clean.lower():
+                    continue
+                mins = int(mins_str)
+                hrs = round(mins / 60.0, 2)
+                hrs_str = f"{hrs:g}"
+                
+                topics.append({
+                    "day_label": full_day_header,
+                    "topic_name": sub_name_clean,
+                    "estimated_duration_hours": hrs_str
+                })
+        else:
+            main_headings = re.findall(r'^\d+\.\s*([^\n]+)', block_strip, re.MULTILINE)
+            for h_name in main_headings:
+                h_clean = re.sub(r'\(continued\)', '', h_name, flags=re.IGNORECASE).strip()
+                if h_clean and 'daily total' not in h_clean.lower() and 'timeline:' not in h_clean.lower():
+                    topics.append({
+                        "day_label": full_day_header,
+                        "topic_name": h_clean,
+                        "estimated_duration_hours": "2"
+                    })
+
+    # Post-KA Phases parsed directly from H4 headers or default
+    asmt_match = re.search(r'####\s*Final\s*Assessment[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE) or re.search(r'Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE)
+    sr_match = re.search(r'####\s*Shadow\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)', generated_content, re.IGNORECASE)
+    lr_match = re.search(r'####\s*Lead\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+onwards', generated_content, re.IGNORECASE)
+
+    if asmt_match:
+        a_start, a_end = int(asmt_match.group(1)), int(asmt_match.group(2))
+        a_days = int(asmt_match.group(3)) if (len(asmt_match.groups()) >= 3 and asmt_match.group(3)) else (a_end - a_start + 1)
+        asmt_label = f"Day {a_start} to Day {a_end}"
+        asmt_hrs = a_days * 24
+        asmt_dur = f"{asmt_hrs} Hours ({a_days} Days)"
+    else:
+        a_days = 90
+        a_start = ka_last_day + 1
+        a_end = ka_last_day + a_days
+        asmt_label = f"Day {a_start} to Day {a_end}"
+        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
+
+    topics.append({
+        "day_label": asmt_label,
+        "topic_name": "Mandatory Final Assessment Evaluation Window",
+        "estimated_duration_hours": asmt_dur
+    })
+
+    if sr_match:
+        s_start, s_end = int(sr_match.group(1)), int(sr_match.group(2))
+        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
+        s_days = max(1, s_end - s_start + 1)
+        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+    else:
+        s_days = 14
+        s_start = a_end + 1
+        s_end = s_start + 13
+        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
+        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+
+    topics.append({
+        "day_label": sr_label,
+        "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution",
+        "estimated_duration_hours": sr_dur
+    })
+
+    if lr_match:
+        l_start = int(lr_match.group(1))
+        lr_label = f"Day {l_start} onwards (Lead Phase)"
+    else:
+        l_start = s_end + 1
+        lr_label = f"Day {l_start} onwards (Lead Phase)"
+
+    topics.append({
+        "day_label": lr_label,
+        "topic_name": "Independent Project Leadership & Transition Completion",
+        "estimated_duration_hours": "Ongoing (Lead Phase)"
+    })
+
+    return topics
+
+def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1):
+    """Separate KA topics and Post-KA topics, then reconstruct Post-KA topics strictly as: Assessment -> Shadow -> Lead."""
+    import re
+    
+    ka_topics = []
+    
+    for t in topics:
+        d_lbl = str(t.get('day_label', ''))
+        t_nm = str(t.get('topic_name', ''))
+        full_str = (d_lbl + ' ' + t_nm).lower()
+        
+        if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
+            continue
+        ka_topics.append(t)
+            
+    # Parse exact timeline numbers from generated_content markdown strictly from H4 headers if present
+    asmt_match = re.search(r'####\s*Final\s*Assessment[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE) or re.search(r'Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE)
+    sr_match = re.search(r'####\s*Shadow\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)', generated_content, re.IGNORECASE)
+    lr_match = re.search(r'####\s*Lead\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+onwards', generated_content, re.IGNORECASE)
+
+    # 1. Assessment Topic
+    if asmt_match:
+        a_start, a_end = int(asmt_match.group(1)), int(asmt_match.group(2))
+        a_days = int(asmt_match.group(3)) if (len(asmt_match.groups()) >= 3 and asmt_match.group(3)) else (a_end - a_start + 1)
+        asmt_label = f"Day {a_start} to Day {a_end}"
+        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
+    else:
+        a_days = 90
+        a_start = ka_last_day + 1
+        a_end = ka_last_day + a_days
+        asmt_label = f"Day {a_start} to Day {a_end}"
+        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
+        
+    asmt_topic = {
+        "day_label": asmt_label,
+        "topic_name": "Mandatory Final Assessment Evaluation Window",
+        "estimated_duration_hours": asmt_dur
+    }
+
+    # 2. Shadow Topic
+    if sr_match:
+        s_start, s_end = int(sr_match.group(1)), int(sr_match.group(2))
+        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
+        s_days = max(1, s_end - s_start + 1)
+        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+    else:
+        s_days = 14
+        s_start = a_end + 1
+        s_end = s_start + 13
+        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
+        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+        
+    sr_topic = {
+        "day_label": sr_label,
+        "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution",
+        "estimated_duration_hours": sr_dur
+    }
+
+    # 3. Lead Topic
+    if lr_match:
+        l_start = int(lr_match.group(1))
+        lr_label = f"Day {l_start} onwards (Lead Phase)"
+    else:
+        l_start = s_end + 1
+        lr_label = f"Day {l_start} onwards (Lead Phase)"
+        
+    lr_topic = {
+        "day_label": lr_label,
+        "topic_name": "Independent Project Leadership & Transition Completion",
+        "estimated_duration_hours": "Ongoing (Lead Phase)"
+    }
+
+    final_topics = ka_topics + [asmt_topic, sr_topic, lr_topic]
+    return final_topics
+
+def recalculate_plan_timeline_service(plan_id, new_assessment_days):
+    """Dynamically update plan markdown text and topics in DB when manager saves new assessment window days."""
+    try:
+        plan_res = execute_query("SELECT generated_content, project_config FROM kt_plans WHERE id = %s", (plan_id,))
+        if not plan_res or not plan_res[0].get('generated_content'):
+            return
+        
+        content = plan_res[0]['generated_content']
+        proj_config = plan_res[0].get('project_config')
+        if proj_config and isinstance(proj_config, str):
+            try:
+                proj_config = json.loads(proj_config)
+            except Exception:
+                proj_config = {}
+        elif not isinstance(proj_config, dict):
+            proj_config = {}
+            
+        proj_config['final_deadline_extension_days'] = new_assessment_days
+
+        # Dynamically determine the last KA day (ka_last_day) strictly from Knowledge Acquisition phase section before H4 Post-KA headers
+        ka_content_part = re.split(r'####\s*(?:Final\s*Assessment|Shadow\s*Resourcing|Lead\s*Resourcing)', content, flags=re.IGNORECASE)[0]
+        content_day_matches = re.findall(r'Day\s+(\d+)', ka_content_part, re.IGNORECASE)
+        ka_last_day = max(int(m) for m in content_day_matches) if content_day_matches else 1
+
+        asmt_start = ka_last_day + 1
+        asmt_end = ka_last_day + new_assessment_days
+        sr_start = asmt_end + 1
+        sr_end = sr_start + 13 # 14 days
+        lr_start = sr_end + 1
+
+        # 1. Replace Assessment timeline in content under H4 header
+        content = re.sub(
+            r'(####\s*Final\s*Assessment[\s\S]*?)Timeline:\s*Day\s+\d+\s+to\s+Day\s+\d+(?:\s*\(\d+\s*Days\))?',
+            rf'\g<1>Timeline: Day {asmt_start} to Day {asmt_end} ({new_assessment_days} Days)',
+            content,
+            count=1,
+            flags=re.IGNORECASE
+        )
+        content = re.sub(
+            r'((?:Mandatory\s*)?Final\s*Assessment\s*Evaluation\s*Window[^\n]*?:\s*)\d+(\s*Days)',
+            rf'\g<1>{new_assessment_days}\g<2>',
+            content,
+            flags=re.IGNORECASE
+        )
+
+        # 2. Replace Shadow timeline in content under H4 header
+        content = re.sub(
+            r'(####\s*Shadow\s*Resourcing[\s\S]*?)Timeline:\s*Day\s+\d+\s+to\s+Day\s+\d+',
+            rf'\g<1>Timeline: Day {sr_start} to Day {sr_end}',
+            content,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+        # 3. Replace Lead timeline in content under H4 header
+        content = re.sub(
+            r'(####\s*Lead\s*Resourcing[\s\S]*?)Timeline:\s*Day\s+\d+\s+onwards',
+            rf'\g<1>Timeline: Day {lr_start} onwards',
+            content,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+        # Write updated content and project_config back to kt_plans table
+        execute_write(
+            "UPDATE kt_plans SET generated_content = %s, project_config = %s, final_deadline_extension_days = %s WHERE id = %s",
+            (content, json.dumps(proj_config), new_assessment_days, plan_id)
+        )
+
+        # Re-sync topics table instantly using deterministic Python parser without slow LLM calls
+        topics = parse_topics_directly_from_content(content)
         execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
-        
-        count = 0
         for item in topics:
             query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
             execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
-            count += 1
-            
-        return count
+
     except Exception as e:
-        logging.warning(f"Failed to extract topics for plan {plan_id}: {e}")
-        return 0
+        logging.error(f"Error in recalculate_plan_timeline_service: {e}")
+
+def extract_and_save_topics(plan_id, generated_content):
+    topics = []
+    try:
+        extraction_prompt = load_prompt("plan_topic_extraction.txt", generated_content=generated_content)
+        extraction_response = call_llm(extraction_prompt)
+        
+        import re
+        clean_json = extraction_response.strip()
+        match = re.search(r'\[.*\]', clean_json, re.DOTALL)
+        if match:
+            clean_json = match.group(0)
+            topics = json.loads(clean_json)
+    except Exception as e:
+        logging.warning(f"LLM topic extraction notice for plan {plan_id}: {e}")
+
+    # Count extracted KA topics from LLM
+    ka_topics_count = sum(1 for t in topics if 'assessment' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower() and 'shadow' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower() and 'lead' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower())
+
+    # Count total Day X headings in generated_content markdown
+    markdown_day_count = len(re.findall(r'^Day\s+\d+:', generated_content, re.MULTILINE | re.IGNORECASE))
+
+    # If LLM response was truncated or yielded too few topics compared to markdown days, use deterministic Python parser
+    if ka_topics_count < markdown_day_count:
+        topics = parse_topics_directly_from_content(generated_content)
+    else:
+        # Dynamically determine the maximum KA day (ka_last_day) from extracted topics
+        ka_last_day = 1
+        filtered_topics = []
+        for t in topics:
+            d_label = str(t.get('day_label', ''))
+            t_name = str(t.get('topic_name', ''))
+            full_str = (d_label + ' ' + t_name).lower()
+            
+            # Skip any literal "Timeline:" bullet items accidentally extracted as topic rows
+            if t_name.strip().lower().startswith('timeline:') or t_name.strip().lower().startswith('• timeline:'):
+                continue
+
+            # Skip any LLM-hallucinated daily 2-hour topics for shadow/ticket resolution in post-KA phase
+            if ('shadow' in full_str or 'ticket resolution' in full_str or 'lead' in full_str) and re.search(r'Day\s+(?:1[7-9]|[2-9]\d)', d_label, re.IGNORECASE):
+                continue
+
+            filtered_topics.append(t)
+            if 'assessment' not in full_str and 'shadow' not in full_str and 'lead' not in full_str:
+                day_nums = re.findall(r'Day\s+(\d+)', d_label, re.IGNORECASE)
+                for dn in day_nums:
+                    ka_last_day = max(ka_last_day, int(dn))
+
+        topics = filtered_topics
+
+    # Reconstruct Post-KA topics strictly in order: Assessment -> Shadow -> Lead, matching markdown dates
+    topics = ensure_post_ka_phase_order(topics, generated_content, ka_last_day if 'ka_last_day' in locals() else 1)
+
+    # Clear existing topics if this is a resync
+    execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
+    
+    count = 0
+    for item in topics:
+        query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
+        execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
+        count += 1
+        
+    return count
 
 def add_topic_service(plan_id, day_label, topic_name, estimated_duration_hours="N/A"):
     query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
@@ -251,3 +557,159 @@ def extract_plan_info_from_doc_service(files_input):
         "scope_description": extracted_scope
     }
 
+def recalculate_plan_timeline_service(plan_id, new_assessment_days):
+    """Dynamically update plan markdown text and topics in DB when manager saves new assessment window days."""
+    try:
+        plan_res = execute_query("SELECT generated_content, project_config FROM kt_plans WHERE id = %s", (plan_id,))
+        if not plan_res or not plan_res[0].get('generated_content'):
+            return
+        
+        content = plan_res[0]['generated_content']
+        proj_config = plan_res[0].get('project_config')
+        if proj_config and isinstance(proj_config, str):
+            try:
+                proj_config = json.loads(proj_config)
+            except Exception:
+                proj_config = {}
+        elif not isinstance(proj_config, dict):
+            proj_config = {}
+            
+        proj_config['final_deadline_extension_days'] = new_assessment_days
+
+        # 1. Dynamically determine ka_last_day from DB plan_topics (checking KA rows ONLY)
+        ka_last_day = 1
+        ka_rows = execute_query(
+            "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s",
+            (plan_id,)
+        )
+        if ka_rows:
+            for r in ka_rows:
+                lbl = str(r.get('day_label', ''))
+                tname = str(r.get('topic_name', ''))
+                full_str = (lbl + ' ' + tname).lower()
+                if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
+                    continue
+                matches = re.findall(r'Day\s+(\d+)', lbl, re.IGNORECASE)
+                for m in matches:
+                    ka_last_day = max(ka_last_day, int(m))
+
+        # Fallback to ka_content_part in markdown if plan_topics yielded nothing
+        if ka_last_day == 1 and content:
+            ka_content_part = re.split(r'####?\s*Final\s*Assessment', content, flags=re.IGNORECASE)[0]
+            content_day_matches = re.findall(r'Day\s+(\d+)', ka_content_part, re.IGNORECASE)
+            if content_day_matches:
+                ka_last_day = max(int(m) for m in content_day_matches)
+
+        asmt_start = ka_last_day + 1
+        asmt_end = ka_last_day + new_assessment_days
+        sr_start = asmt_end + 1
+        sr_end = sr_start + 13 # 14 days
+        lr_start = sr_end + 1
+
+        # 2. Reconstruct the 3 Post-KA Phase blocks in Markdown text cleanly
+        def update_asmt_block(m):
+            header = m.group(1)
+            block = m.group(2)
+            block = re.sub(
+                r'([•\*]?\s*Timeline:\s*)Day\s+\d+\s+to\s+Day\s+\d+(?:\s*\([^)]*\))?',
+                rf'\g<1>Day {asmt_start} to Day {asmt_end} ({new_assessment_days} Days)',
+                block,
+                flags=re.IGNORECASE
+            )
+            block = re.sub(
+                r'((?:Mandatory\s*)?Final\s*Assessment\s*Evaluation\s*Window[^\n]*?:\s*)\d+(\s*Days)',
+                rf'\g<1>{new_assessment_days}\g<2>',
+                block,
+                flags=re.IGNORECASE
+            )
+            return header + block
+
+        content = re.sub(
+            r'(####?\s*Final\s*Assessment[^\n]*\n)([\s\S]*?)(?=\n####?\s*Shadow|\n####?\s*Lead|\n##|\Z)',
+            update_asmt_block,
+            content,
+            flags=re.IGNORECASE
+        )
+
+        def update_sr_block(m):
+            header = m.group(1)
+            block = m.group(2)
+            block = re.sub(
+                r'([•\*]?\s*Timeline:\s*)Day\s+\d+\s+to\s+Day\s+\d+(?:\s*\([^)]*\))?',
+                rf'\g<1>Day {sr_start} to Day {sr_end} (Week 1-2: 14 Days / 2 Weeks)',
+                block,
+                flags=re.IGNORECASE
+            )
+            return header + block
+
+        content = re.sub(
+            r'(####?\s*Shadow\s*Resourcing[^\n]*\n)([\s\S]*?)(?=\n####?\s*Lead|\n##|\Z)',
+            update_sr_block,
+            content,
+            flags=re.IGNORECASE
+        )
+
+        def update_lr_block(m):
+            header = m.group(1)
+            block = m.group(2)
+            block = re.sub(
+                r'([•\*]?\s*Timeline:\s*)Day\s+\d+\s+onwards',
+                rf'\g<1>Day {lr_start} onwards',
+                block,
+                flags=re.IGNORECASE
+            )
+            return header + block
+
+        content = re.sub(
+            r'(####?\s*Lead\s*Resourcing[^\n]*\n)([\s\S]*?)(?=\n##|\Z)',
+            update_lr_block,
+            content,
+            flags=re.IGNORECASE
+        )
+
+        # Write updated content and project_config back to kt_plans table
+        execute_write(
+            "UPDATE kt_plans SET generated_content = %s, project_config = %s, final_deadline_extension_days = %s WHERE id = %s",
+            (content, json.dumps(proj_config), new_assessment_days, plan_id)
+        )
+
+        # 3. Super-Safe DB Update for plan_topics table:
+        # KA Phase rows in plan_topics table are 100% UNTOUCHED!
+        # Delete ONLY the 3 Post-KA phase rows and re-insert updated Post-KA rows cleanly.
+        execute_write(
+            """DELETE FROM plan_topics 
+               WHERE plan_id = %s 
+               AND (LOWER(topic_name) LIKE %s 
+                    OR LOWER(topic_name) LIKE %s 
+                    OR LOWER(topic_name) LIKE %s
+                    OR LOWER(day_label) LIKE %s
+                    OR LOWER(day_label) LIKE %s)""",
+            (plan_id, '%assessment%', '%shadow%', '%lead%', '%shadow%', '%lead%')
+        )
+
+        asmt_hrs = new_assessment_days * 24
+        asmt_label = f"Day {asmt_start} to Day {asmt_end}"
+        asmt_dur = f"{asmt_hrs} Hours ({new_assessment_days} Days)"
+
+        sr_days = 14
+        sr_hrs = sr_days * 24
+        sr_label = f"Day {sr_start} to Day {sr_end} (Shadow Phase)"
+        sr_dur = f"{sr_hrs} Hours ({sr_days} Days / 2 Weeks)"
+
+        lr_label = f"Day {lr_start} onwards (Lead Phase)"
+
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, asmt_label, "Mandatory Final Assessment Evaluation Window", asmt_dur)
+        )
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, sr_label, "Practical Shadow Experience & Hands-on Ticket Resolution", sr_dur)
+        )
+        execute_write(
+            "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+            (plan_id, lr_label, "Independent Project Leadership & Transition Completion", "Ongoing (Lead Phase)")
+        )
+
+    except Exception as e:
+        logging.error(f"Error in recalculate_plan_timeline_service: {e}")

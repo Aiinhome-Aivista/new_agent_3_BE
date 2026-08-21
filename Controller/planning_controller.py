@@ -41,9 +41,11 @@ def generate_plan():
         except Exception:
             pass # fallback to None if invalid token
     
+    project_config = data.get('project_config')
+    project_id = data.get('project_id')
     try:
         from services.plan_service import generate_plan_service
-        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus)
+        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus, project_config, project_id)
         
         return jsonify({
             "success": True, 
@@ -109,16 +111,80 @@ def get_plans():
             
             if stakeholder_id:
                 if for_dropdown:
-                    query = "SELECT * FROM kt_plans WHERE approved_by = %s AND status IN ('approved', 'closed') ORDER BY created_at DESC"
+                    query = "SELECT * FROM kt_plans WHERE (approved_by = %s OR approved_by IS NULL) AND status IN ('approved', 'closed') ORDER BY created_at DESC"
                     plans = execute_query(query, (stakeholder_id,))
                 else:
-                    query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s ORDER BY created_at DESC"
+                    query = "SELECT * FROM kt_plans WHERE created_by = %s OR approved_by = %s OR approved_by IS NULL ORDER BY created_at DESC"
                     plans = execute_query(query, (stakeholder_id, stakeholder_id))
+            else:
+                query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
+                plans = execute_query(query)
+        elif user_role and ('incoming' in user_role.lower() or 'receiver' in user_role.lower() or 'giver' in user_role.lower() or 'outgoing' in user_role.lower() or 'sme' in user_role.lower()):
+            from services.plan_service import resolve_stakeholder_for_user
+            stakeholder_id = None
+            if user_email:
+                stakeholder_id = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
+            
+            if stakeholder_id:
+                union_query = """
+                    SELECT DISTINCT plan_id FROM (
+                        SELECT m.plan_id FROM meetings m JOIN attendance a ON m.id = a.meeting_id WHERE a.stakeholder_id = %s AND m.plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM assessments WHERE stakeholder_id = %s AND plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM assessment_results WHERE stakeholder_id = %s AND plan_id IS NOT NULL
+                        UNION
+                        SELECT plan_id FROM stakeholders WHERE id = %s AND plan_id IS NOT NULL
+                    ) AS user_plans
+                """
+                plan_rows = execute_query(union_query, (stakeholder_id, stakeholder_id, stakeholder_id, stakeholder_id))
+                assigned_plan_ids = [r['plan_id'] for r in plan_rows if r.get('plan_id')]
+
+                if assigned_plan_ids:
+                    format_strings = ','.join(['%s'] * len(assigned_plan_ids))
+                    if for_dropdown:
+                        query = f"SELECT * FROM kt_plans WHERE id IN ({format_strings}) AND status IN ('approved', 'closed') ORDER BY created_at DESC"
+                    else:
+                        query = f"SELECT * FROM kt_plans WHERE id IN ({format_strings}) ORDER BY created_at DESC"
+                    plans = execute_query(query, tuple(assigned_plan_ids))
+                else:
+                    plans = []
             else:
                 plans = []
         else:
             query = "SELECT * FROM kt_plans ORDER BY created_at DESC"
             plans = execute_query(query)
+        for p in plans:
+            pid = p['id']
+            try:
+                shadow_map = execute_query("SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_shadow = 1", (pid,))
+                p['shadow_stakeholder_ids'] = [r['stakeholder_id'] for r in shadow_map] if shadow_map else []
+            except Exception as e:
+                p['shadow_stakeholder_ids'] = []
+            
+            try:
+                eligible_query = """
+                    SELECT DISTINCT s.stakeholder_id
+                    FROM sud_documents s
+                    JOIN assessment_results ar ON s.stakeholder_id = ar.stakeholder_id AND s.plan_id = ar.plan_id
+                    WHERE s.plan_id = %s 
+                      AND ar.assessment_type = 'final' 
+                      AND ar.overall_score >= 40
+                """
+                eligible_map = execute_query(eligible_query, (pid,))
+                p['shadow_eligible_stakeholder_ids'] = [r['stakeholder_id'] for r in eligible_map] if eligible_map else []
+                
+                sud_map = execute_query("SELECT DISTINCT stakeholder_id FROM sud_documents WHERE plan_id = %s", (pid,))
+                p['sud_submitted_stakeholder_ids'] = [r['stakeholder_id'] for r in sud_map] if sud_map else []
+                
+                asmt_map = execute_query("SELECT DISTINCT stakeholder_id FROM assessment_results WHERE plan_id = %s AND assessment_type = 'final' AND overall_score >= 40", (pid,))
+                p['assessment_passed_stakeholder_ids'] = [r['stakeholder_id'] for r in asmt_map] if asmt_map else []
+                
+            except Exception as e:
+                print(f"Error fetching shadow eligible stakeholders for plan {pid}: {e}")
+                p['shadow_eligible_stakeholder_ids'] = []
+                p['sud_submitted_stakeholder_ids'] = []
+                p['assessment_passed_stakeholder_ids'] = []
 
         return jsonify({"success": True, "data": plans}), 200
     except Exception as e:
@@ -238,6 +304,18 @@ def close_plan(id):
             execute_write(query, (id,))
 
         return jsonify({"success": True, "message": "Plan closed successfully"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/<int:plan_id>/link-project', methods=['PUT'])
+def link_project(plan_id):
+    data = request.json
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({"success": False, "message": "Missing project_id"}), 400
+    try:
+        execute_write("UPDATE kt_plans SET project_id = %s WHERE id = %s", (project_id, plan_id))
+        return jsonify({"success": True}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 

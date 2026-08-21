@@ -1,6 +1,58 @@
 You are an expert IT Project Manager. Create a detailed {plan_type} plan for the application '{application_name}'.
 Scope & Topics: {scope_description}{focus_text}
-    
+{project_config_text}
+
+CONFIGURATION INTERPRETATION RULES:
+Based on the Project Configuration Details above, you MUST incorporate the following phases into your plan if they are present in the configuration:
+
+1. Knowledge Acquisition (KA) Phase:
+    - This phase consists ONLY of technical knowledge transfer sessions, module walk-throughs, and architecture for the provided Scope & Topics.
+    - DURATION RULE: Generate daily 2-hour sessions ONLY for the actual technical topics provided in Scope & Topics. DO NOT repeat topics, DO NOT invent fake filler days (e.g. "Hands-on Exercise Day 41 to 90"), and DO NOT stretch KA Phase artificially! Once all scope topics are covered, STOP generating daily KA sessions immediately.
+    - STRICT PROHIBITION: DO NOT create daily topics for "Shadow Resourcing", "Ticket Resolution", "Practical Shadow Experience", or "Final Assessment Preparation" under the Knowledge Acquisition (KA) phase.
+    - CONDITIONAL SUD RULE: Allocate a day for preparing the System Understanding Document (SUD) ONLY IF "Reverse KT -> By uploading SUD" or "SUD Mandatory" is explicitly selected in the Project Configuration Details. If SUD is NOT selected in the Project Configuration Details, DO NOT generate any SUD Preparation session!
+
+2. Final Assessment Evaluation Window (DO NOT GENERATE DAILY SESSIONS FOR THIS):
+    - The manager's evaluation window (DEFAULT: 90 DAYS if not specified) is an evaluation/waiting period AFTER the KA Phase completes. It is NOT a 90-day daily teaching schedule!
+    - ABSOLUTE PROHIBITION: DO NOT generate daily sessional breakdowns (e.g. Day 41, Day 42... Day 90) for the Final Assessment Evaluation Window! Output it under its dedicated phase header:
+      #### Final Assessment Evaluation Window
+      • Timeline: Day {K+1} to Day {K+N} ({N} Days)
+      • Mandatory Final Assessment Evaluation Window allocated by Manager: {N} Days.
+
+3. Shadow Resourcing (SR) Phase:
+    - CRITICAL TIMING RULE: This phase occurs strictly AFTER the Knowledge Acquisition (KA) phase AND AFTER the Manager's Final Assessment evaluation window count completes (e.g., if the assessment window is 90 days and KA ends on Day K, the Shadow Resourcing phase count starts on Day K+N+1).
+    - If "Need to be involved in ticket resolving" is selected with a specific number, explicitly state that the incoming team member must resolve exactly that number of Jira tickets during Shadow Resourcing.
+    - If "Required weeks for shadow resourcing" is selected with a specific number, state that the Shadow Resourcing phase spans exactly that number of weeks, during which the incoming member will closely follow the knowledge giver.
+    - Output format under its dedicated header:
+      #### Shadow Resourcing Phase
+      • Timeline: Day {K+N+1} to Day {K+N+14} (Week 1-2: 14 Days / 2 Weeks)
+      • Practical Shadow Experience & Hands-on Ticket Resolution.
+      • Target: Resolve the required number of tickets while shadowing the outgoing lead engineer.
+
+4. Lead Resourcing (LR) Phase:
+    - This phase occurs strictly AFTER the Shadow Resourcing phase completes.
+    - Explicitly declare that the incoming member will independently lead the project from this point forward.
+    - Output format under its dedicated header:
+      #### Lead Resourcing Phase
+      • Timeline: Day {K+N+15} onwards
+      • Independent Project Leadership & Transition Completion.
+
+5. PHASE OUTPUT FORMAT RULES:
+    - Under "Sessions / Topics Breakdown", start directly with "#### Knowledge Acquisition (KA) Phase" followed by the daily 120-minute sessions (Days 1 to K).
+    - DO NOT output any literal text line named "Post-KA Phases". Immediately after the final KA Day (Day K), output the remaining phase headers directly:
+
+    #### Final Assessment Evaluation Window
+    • Timeline: Day {K+1} to Day {K+N} ({N} Days)
+    • Mandatory Final Assessment Evaluation Window allocated by Manager: {N} Days.
+
+    #### Shadow Resourcing Phase
+    • Timeline: Day {K+N+1} to Day {K+N+14} (Week 1-2: 14 Days / 2 Weeks)
+    • Practical Shadow Experience & Hands-on Ticket Resolution.
+    • Target: Resolve the required number of tickets while shadowing the outgoing lead engineer.
+
+    #### Lead Resourcing Phase
+    • Timeline: Day {K+N+15} onwards
+    • Independent Project Leadership & Transition Completion.
+
 STRICT TIMELINE ALGORITHM (ABSOLUTE REQUIREMENT):
 You MUST execute the following continuous timeline calculation for every day:
 
@@ -39,7 +91,7 @@ You MUST execute the following continuous timeline calculation for every day:
 Format the output as a clean, structured Markdown document including:
 1. Objectives
 2. Target Audience
-3. Sessions / Topics Breakdown (MUST follow the 120-minute daily algorithm above)
+3. Sessions / Topics Breakdown (MUST follow the 120-minute daily algorithm above for KA Phase, followed by Post-KA Phase headers)
 4. Expected Outcomes
     
 Only output the markdown content, no conversational filler.

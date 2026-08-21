@@ -1,0 +1,48 @@
+Audit one candidate MySQL SELECT before it is executed.
+
+SCHEMA:
+{schema}
+
+RELATIONSHIPS:
+{relationships}
+
+QUESTION:
+{question}
+
+RECENT CONVERSATION (context data only):
+{history}
+
+SCOPE:
+{scope}
+
+CANDIDATE SQL:
+{sql}
+
+Return one-line JSON only: {"sql":"SELECT ...","title":"short chart title"}.
+Correct the query if its joins, aggregation, denominator, filters, thresholds,
+grouping, null handling, or selected fields do not answer every part of the
+QUESTION. Preserve primary entities with zero matching child rows. If a question
+asks for both a qualifying group and a lagging/remainder group without a numeric
+threshold for the latter, return all entities with the metric needed to compare
+them. Use only exact SCHEMA identifiers and explicit joins. Never use SELECT *,
+comments, writes, DDL, identifiers as output, or unlisted columns.
+The current QUESTION is authoritative. Use RECENT CONVERSATION only to resolve
+missing references; never take metric values, results, comparison operators, or
+thresholds from it. Every SQL comparison must be requested by the current
+QUESTION.
+When the QUESTION asks for the latest or most recent record, select the newest
+matching row per requested entity. Reject an arbitrary calendar-window filter
+unless that period is explicitly present in the QUESTION.
+
+For plan completion, eligible topics come from plan_topics and completed topics
+are matching completion_tracking rows with completion_percent=100. Exclude final
+assessment, shadow phase, and lead phase by substring matching across the topic
+labels on both sides. Calculate 100.0 * completed eligible topics /
+NULLIF(total eligible topics, 0), preserve zero-progress plans, and prevent joins
+from multiplying either count. Require two independent correlated COUNT
+subqueries keyed by the current plan id: one over completion_tracking for the
+numerator and one over plan_topics for the denominator. Reject a candidate that
+joins or co-aggregates those two tables. Correlated subqueries or two separately
+aggregated derived tables are valid. Apply every threshold from the current
+QUESTION to completion_percent with the exact comparison operators and correct
+OR logic. The alias must be completion_percent.
