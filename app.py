@@ -29,6 +29,7 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
