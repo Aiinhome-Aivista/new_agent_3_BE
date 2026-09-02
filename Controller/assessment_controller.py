@@ -178,14 +178,31 @@ def generate_questions():
                     "message": f"Knowledge documents for the following day(s) are missing: {missing_str}. All completed day documents must be uploaded before starting the Final Assessment."
                 }), 400
 
+        import random
+        import time
+        import uuid
+        
+        # Use stakeholder_id and timestamp seed for unique per-receiver question generation
+        seed_str = f"candidate_{stakeholder_id or 0}_plan_{plan_id}_{time.time()}_{uuid.uuid4().hex[:4]}"
+        rng = random.Random(seed_str)
+
         context_texts = []
         target_day_filter = day_label if assessment_type == 'day_wise' else None
         
-        for topic in target_topics[:15]:
-            results = query_knowledge(topic, plan_id=plan_id, kt_day=target_day_filter, n_results=3)
+        # Shuffle target topics per attempt so retrieval query order varies
+        shuffled_target_topics = list(target_topics)
+        rng.shuffle(shuffled_target_topics)
+
+        for topic in shuffled_target_topics[:15]:
+            results = query_knowledge(topic, plan_id=plan_id, kt_day=target_day_filter, n_results=5)
             for r in results:
                 if r['text'] not in context_texts:
                     context_texts.append(r['text'])
+
+        # Randomly shuffle and select context chunks for diversity
+        if context_texts:
+            rng.shuffle(context_texts)
+            context_texts = context_texts[:12]
 
         context_str = "\n---\n".join(context_texts) if context_texts else ""
 
@@ -195,7 +212,8 @@ def generate_questions():
                 "message": "Documents are not uploaded or contain no extractable text."
             }), 400
 
-        mode_desc = f"Day-wise Assessment (Optional) for '{day_label}'" if assessment_type == 'day_wise' and day_label else "Final Comprehensive Assessment (Mandatory)"
+        variant_id = f"Candidate-{stakeholder_id or 'General'}-{uuid.uuid4().hex[:6].upper()}"
+        mode_desc = f"Day-wise Assessment (Optional) for '{day_label}' [Variant: {variant_id}]" if assessment_type == 'day_wise' and day_label else f"Final Comprehensive Assessment (Mandatory) [Variant: {variant_id}]"
 
         prompt = load_prompt(
             "assessment_question_generation.txt",
@@ -204,27 +222,11 @@ def generate_questions():
             context_str=context_str,
             question_count=Config.ASSESSMENT_QUESTION_COUNT
         )
-
-        # =========================================================================
-        # COMMENTED OUT (Per User Requirement):
-        # Previous feature that generated questions manually from LLM when no documents were uploaded.
-        # Required Behavior: If no documents are uploaded, return "Documents are not uploaded."
-        # =========================================================================
-        # else:
-        #     prompt = f"""
-        #     Assessment Mode: {mode_desc}
-        #
-        #     Target Topics:
-        #     {topics_str}
-        #     
-        #     Generate exactly {Config.ASSESSMENT_QUESTION_COUNT} assessment questions.
-        #     
-        #     IMPORTANT:
-        #     - Generate questions ONLY from the target topics above.
-        #     - Do NOT generate questions from unfinished or unrelated topics.
-        #     - Do NOT assume any missing knowledge.
-        #     - Return ONLY a JSON array of strings, where each string is a question.
-        #     """
+        
+        # Append candidate diversity instruction
+        prompt += f"\n\nCRITICAL CANDIDATE DIVERSITY INSTRUCTION:\n" \
+                  f"- Generate a UNIQUE, non-repeating set of questions specifically for Exam Variant '{variant_id}'.\n" \
+                  f"- Focus on different technical scenarios, edge cases, and architectural details from the Context so no two candidates or attempts receive identical questions."
 
         llm_response = call_llm(prompt)
         
@@ -232,13 +234,17 @@ def generate_questions():
             clean_json = llm_response.replace('```json', '').replace('```', '').strip()
             questions = json.loads(clean_json)
         except json.JSONDecodeError:
-            questions = [
-                f"What are the main objectives covered in {day_label if day_label else 'this KT plan'}?",
-                "Can you describe the primary architecture components discussed?",
-                "What are the key technical concepts and workflows?",
-                "How do you handle error cases or edge scenarios for these topics?",
-                "Who are the key points of contact and resources for this domain?"
+            fallback_pool = [
+                f"What are the primary technical workflows and objectives covered in {day_label if day_label else 'this KT plan'}?",
+                "Can you describe the core architectural components and data flow discussed in the documents?",
+                "What are the key error handling mechanisms and edge-case procedures for these modules?",
+                "How are security, authentication, or system dependencies managed in this application?",
+                "What step-by-step procedures should be followed when deploying or troubleshooting these topics?",
+                "Describe the key integration points between the components outlined in the documentation.",
+                "What critical configuration settings or monitoring metrics are essential for this domain?"
             ]
+            rng.shuffle(fallback_pool)
+            questions = fallback_pool[:Config.ASSESSMENT_QUESTION_COUNT]
             
         return jsonify({"success": True, "data": questions}), 200
     except Exception as e:
@@ -614,6 +620,13 @@ def update_plan_assessment_settings(plan_id):
             from services.notification_service import trigger_final_assessment_reminder
             trigger_final_assessment_reminder(plan_id)
         except Exception:
+            pass
+
+        # Recalculate plan timeline and topics when assessment window days are changed
+        try:
+            from services.plan_service import recalculate_plan_timeline_service
+            recalculate_plan_timeline_service(plan_id, days)
+        except Exception as e:
             pass
 
         return jsonify({

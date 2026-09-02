@@ -2,56 +2,142 @@ from db import execute_query, execute_write
 from llm_service import call_llm, load_prompt
 import os
 from datetime import datetime
+import re
+
 try:
-    from docx import Document
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
 except ImportError:
-    Document = None
+    Presentation = None
 
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'reports_output')
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
-import re
+def clean_markdown(text):
+    if not text:
+        return ""
+    text = text.replace('**', '').strip()
+    text = re.sub(r'^\s*[-*•]\s*', '', text)    # Strip leading bullet icons
+    text = re.sub(r'^\s*#{1,6}\s*', '', text)  # Strip leading hashes (#, ##, ###, ####)
+    text = re.sub(r'^\s*\d+\.\s*', '', text)    # Strip leading numbers (1., 2.)
+    return text.strip()
 
-def generate_report_doc(title, content, filename):
-    if not Document:
-        raise Exception("python-docx is not installed")
-    doc = Document()
-    doc.add_heading(title, 0)
-    
-    for line in content.split('\n'):
-        line = line.strip()
-        if not line:
+def generate_report_pptx(title, content, filename):
+    if not Presentation:
+        raise Exception("python-pptx is not installed")
+        
+    prs = Presentation()
+    prs.slide_width = Inches(13.333) # 16:9 Widescreen
+    prs.slide_height = Inches(7.5)
+
+    blank_layout = prs.slide_layouts[6]
+    title_slide = prs.slides.add_slide(blank_layout)
+
+    # Top accent bar
+    top_bar = title_slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.333), Inches(0.35))
+    top_bar.fill.solid()
+    top_bar.fill.fore_color.rgb = RGBColor(217, 83, 30) # PwC Orange
+    top_bar.line.fill.background()
+
+    # Cover Slide Header
+    tb = title_slide.shapes.add_textbox(Inches(1.0), Inches(1.8), Inches(11.333), Inches(2.2))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = clean_markdown(title)
+    p.font.size = Pt(32)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(30, 41, 59)
+
+    p_sub = tf.add_paragraph()
+    p_sub.text = f"Generated on {datetime.now().strftime('%B %d, %Y')} | Delivery & Solution Advisory"
+    p_sub.font.size = Pt(16)
+    p_sub.font.color.rgb = RGBColor(217, 83, 30)
+    p_sub.space_before = Pt(10)
+
+    # Cover Slide Metadata & Overview Box
+    tb_meta = title_slide.shapes.add_textbox(Inches(1.0), Inches(4.2), Inches(11.333), Inches(2.5))
+    tf_meta = tb_meta.text_frame
+    tf_meta.word_wrap = True
+    p_m1 = tf_meta.paragraphs[0]
+    p_m1.text = "Executive Program Status Report"
+    p_m1.font.size = Pt(18)
+    p_m1.font.bold = True
+    p_m1.font.color.rgb = RGBColor(30, 41, 59)
+
+    p_m2 = tf_meta.add_paragraph()
+    p_m2.text = "• Target Persona: Delivery / Engagement Manager & PwC Leadership Review"
+    p_m2.font.size = Pt(14)
+    p_m2.font.color.rgb = RGBColor(71, 85, 105)
+    p_m2.space_before = Pt(8)
+
+    p_m3 = tf_meta.add_paragraph()
+    p_m3.text = "• Governance & Verification: RAG-Grounded & Audit Verified Status Update"
+    p_m3.font.size = Pt(14)
+    p_m3.font.color.rgb = RGBColor(71, 85, 105)
+    p_m3.space_before = Pt(6)
+
+    # Process markdown content into slide cards
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    current_slide_title = "Executive Status Overview"
+    current_bullets = []
+
+    def flush_slide(stitle, bullets):
+        if not bullets and not stitle:
+            return
+        s = prs.slides.add_slide(blank_layout)
+        
+        # Header accent bar
+        bar = s.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.333), Inches(0.15))
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = RGBColor(217, 83, 30)
+        bar.line.fill.background()
+
+        # Slide Title
+        tb_t = s.shapes.add_textbox(Inches(0.8), Inches(0.5), Inches(11.7), Inches(0.8))
+        tf_t = tb_t.text_frame
+        tf_t.word_wrap = True
+        pt = tf_t.paragraphs[0]
+        pt.text = clean_markdown(stitle)
+        pt.font.size = Pt(22)
+        pt.font.bold = True
+        pt.font.color.rgb = RGBColor(217, 83, 30)
+
+        # Slide Body Bullets
+        tb_b = s.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(11.7), Inches(5.3))
+        tf_b = tb_b.text_frame
+        tf_b.word_wrap = True
+
+        valid_bullets = [clean_markdown(b) for b in bullets if clean_markdown(b)]
+        for idx, bullet in enumerate(valid_bullets[:10]):
+            pb = tf_b.paragraphs[0] if idx == 0 else tf_b.add_paragraph()
+            pb.text = f"•  {bullet}"
+            pb.font.size = Pt(14)
+            pb.font.color.rgb = RGBColor(51, 65, 85)
+            pb.space_after = Pt(10)
+
+    for line in lines:
+        cleaned_line = clean_markdown(line)
+        if not cleaned_line:
             continue
             
-        if line.startswith('### '):
-            doc.add_heading(line[4:], level=3)
-        elif line.startswith('## '):
-            doc.add_heading(line[3:], level=2)
-        elif line.startswith('# '):
-            doc.add_heading(line[2:], level=1)
-        elif line.startswith('- ') or line.startswith('* '):
-            p = doc.add_paragraph(style='List Bullet')
-            parts = re.split(r'(\*\*.*?\*\*)', line[2:])
-            for part in parts:
-                if part.startswith('**') and part.endswith('**'):
-                    p.add_run(part[2:-2]).bold = True
-                else:
-                    p.add_run(part)
+        if line.startswith('#') or (line.endswith(':') and len(cleaned_line) < 45):
+            if current_bullets:
+                flush_slide(current_slide_title, current_bullets)
+                current_bullets = []
+            current_slide_title = cleaned_line
         else:
-            p = doc.add_paragraph()
-            parts = re.split(r'(\*\*.*?\*\*)', line)
-            for part in parts:
-                if part.startswith('**') and part.endswith('**'):
-                    p.add_run(part[2:-2]).bold = True
-                else:
-                    p.add_run(part)
-                    
+            current_bullets.append(cleaned_line)
+
+    if current_bullets:
+        flush_slide(current_slide_title, current_bullets)
+
     filepath = os.path.join(REPORTS_DIR, filename)
-    doc.save(filepath)
+    prs.save(filepath)
     return filepath
 
 def generate_weekly_service(plan_id):
-    # Gather context for LLM
     comp_query = """
         SELECT 
             (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
@@ -69,37 +155,31 @@ def generate_weekly_service(plan_id):
     risks = execute_query(risk_query, (plan_id,))
     
     prompt = load_prompt("report_weekly_summary.txt", avg_comp=avg_comp, risks=risks)
-    
     summary = call_llm(prompt)
     
-    filename = f"Weekly_Report_{plan_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
-    filepath = generate_report_doc(f"Weekly KT Report (Plan {plan_id})", summary, filename)
+    filename = f"Weekly_Report_{plan_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+    filepath = generate_report_pptx(f"Weekly KT Report (Plan {plan_id})", summary, filename)
     
-    # Save to DB
     query = "INSERT INTO reports (plan_id, report_type, file_path) VALUES (%s, %s, %s)"
     report_id = execute_write(query, (plan_id, 'weekly', filename))
     
     return {"id": report_id, "filename": filename}
 
 def generate_final_service(plan_id):
-    # Gather extensive context for final report
     plan_query = "SELECT application_name FROM kt_plans WHERE id = %s"
     app_name = execute_query(plan_query, (plan_id,))[0]['application_name']
     
-    # Fetch completed/covered topics (100% complete)
     topics_query = "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100"
     completed_topics_res = execute_query(topics_query, (plan_id,))
     completed_topics_list = [row['topic'] for row in completed_topics_res]
     source_type = "completed topics (100% progress)"
     
-    # Fallback 1: If no topics are 100% complete, fall back to topics with completion_percent > 0
     if not completed_topics_list:
         fallback_query = "SELECT topic FROM completion_tracking WHERE plan_id = %s AND completion_percent > 0"
         completed_topics_res = execute_query(fallback_query, (plan_id,))
         completed_topics_list = [row['topic'] for row in completed_topics_res]
         source_type = "partially covered topics (progress > 0%)"
         
-    # Fallback 2: If still no topics have any tracked completion, fall back to all plan topics
     if not completed_topics_list:
         fallback_query = "SELECT topic_name FROM plan_topics WHERE plan_id = %s"
         completed_topics_res = execute_query(fallback_query, (plan_id,))
@@ -108,7 +188,6 @@ def generate_final_service(plan_id):
         
     topics_text = "\n".join([f"- {t}" for t in completed_topics_list]) if completed_topics_list else "No topics found"
     
-    # Fetch Stakeholder Names for Sign-off
     manager_query = "SELECT s.name FROM stakeholders s JOIN kt_plans kp ON kp.approved_by = s.id WHERE kp.id = %s"
     manager_res = execute_query(manager_query, (plan_id,))
     manager_name = manager_res[0]['name'] if manager_res else "[Manager Name Not Assigned]"
@@ -146,10 +225,11 @@ def generate_final_service(plan_id):
     
     content = call_llm(prompt)
     
-    filename = f"Final_Report_{plan_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
-    filepath = generate_report_doc(f"Final KT Report - {app_name}", content, filename)
+    filename = f"Final_Report_{plan_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+    filepath = generate_report_pptx(f"Final KT Report - {app_name}", content, filename)
     
     query = "INSERT INTO reports (plan_id, report_type, file_path) VALUES (%s, %s, %s)"
     report_id = execute_write(query, (plan_id, 'final', filename))
     
     return {"id": report_id, "filename": filename}
+

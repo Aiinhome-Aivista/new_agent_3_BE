@@ -258,6 +258,75 @@ def create_meeting():
             # Advance to the next calendar day (time will be set fresh in next iteration)
             current_day += timedelta(days=1)
 
+        try:
+            plan_id = data['plan_id']
+            project_res = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id,))
+            project_id = project_res[0]['project_id'] if project_res else None
+            
+            if project_id and valid_stakeholder_ids:
+                format_strings = ','.join(['%s'] * len(valid_stakeholder_ids))
+                update_sh_query = f"UPDATE stakeholders SET project_id = %s, plan_id = %s WHERE id IN ({format_strings})"
+                update_sh_params = [project_id, plan_id] + list(valid_stakeholder_ids)
+                execute_write(update_sh_query, tuple(update_sh_params))
+        except Exception as upd_err:
+            print(f"Error updating stakeholders with project_id and plan_id: {upd_err}")
+
+        try:
+            from services.notification_service import trigger_plan_requirements_notification
+            sud_recipients = data.get('sud_recipients', [])
+            shadow_mappings = data.get('shadow_mappings', [])
+            lead_recipients = data.get('lead_recipients', [])
+            final_assessment_recipients = data.get('final_assessment_recipients', [])
+            
+            shadow_recipients = []
+            for mapping in shadow_mappings:
+                shadow_recipients.extend(mapping.get('participantIds', []))
+            
+            try:
+                plan_id_map = data['plan_id']
+                proj_q = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id_map,))
+                proj_id = proj_q[0]['project_id'] if proj_q else None
+                if proj_id:
+                    # Handle basic ones first
+                    all_sh = set(sud_recipients + lead_recipients + final_assessment_recipients)
+                    for sh_id in all_sh:
+                        is_sudo = 1 if sh_id in sud_recipients else 0
+                        is_lead = 1 if sh_id in lead_recipients else 0
+                        is_final_assessment = 1 if sh_id in final_assessment_recipients else 0
+                        
+                        mapping_query = """
+                            INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_lead, is_final_assessment)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE
+                                is_sudo = VALUES(is_sudo),
+                                is_lead = VALUES(is_lead),
+                                is_final_assessment = VALUES(is_final_assessment)
+                        """
+                        execute_write(mapping_query, (proj_id, plan_id_map, sh_id, is_sudo, is_lead, is_final_assessment))
+                        
+                    # Handle shadow_mappings separately to include lead_organizer_id
+                    for mapping in shadow_mappings:
+                        org_id = mapping.get('organizerId')
+                        part_ids = mapping.get('participantIds', [])
+                        if org_id and part_ids:
+                            for p_id in part_ids:
+                                mapping_query = """
+                                    INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_shadow, lead_organizer_id)
+                                    VALUES (%s, %s, %s, 1, %s)
+                                    ON DUPLICATE KEY UPDATE
+                                        is_shadow = 1,
+                                        lead_organizer_id = VALUES(lead_organizer_id)
+                                """
+                                execute_write(mapping_query, (proj_id, plan_id_map, p_id, org_id))
+                                
+            except Exception as mapping_err:
+                print(f"Error updating resource_mapping: {mapping_err}")
+
+            if sud_recipients or shadow_mappings or lead_recipients or final_assessment_recipients:
+                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients)
+        except Exception as notify_req_err:
+            print(f"Error triggering requirements notification: {notify_req_err}")
+
         return jsonify({
             "success": True, 
             "data": meeting_ids, 
@@ -265,6 +334,96 @@ def create_meeting():
         }), 201
     except Exception as e:
         print(f"Error in create_meeting: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@scheduling_bp.route('/notify-requirements', methods=['POST'])
+def notify_requirements():
+    try:
+        data = request.json
+        plan_id = data.get('plan_id')
+        if not plan_id:
+            return jsonify({"success": False, "message": "Plan ID is required"}), 400
+
+        shadow_mappings = data.get('shadow_mappings', [])
+        lead_recipients = data.get('lead_recipients', [])
+
+        shadow_recipients = []
+        for mapping in shadow_mappings:
+            shadow_recipients.extend(mapping.get('participantIds', []))
+
+        if not shadow_recipients and not lead_recipients:
+            return jsonify({"success": False, "message": "No recipients provided"}), 400
+
+        try:
+            proj_q = execute_query("SELECT project_id FROM kt_plans WHERE id = %s", (plan_id,))
+            proj_id = proj_q[0]['project_id'] if proj_q else None
+            if proj_id:
+                # Handle lead_recipients
+                for sh_id in lead_recipients:
+                    mapping_query = """
+                        INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead, is_final_assessment)
+                        VALUES (%s, %s, %s, 0, 0, 1, 0)
+                        ON DUPLICATE KEY UPDATE
+                            is_lead = 1
+                    """
+                    execute_write(mapping_query, (proj_id, plan_id, sh_id))
+                    
+                # Handle shadow_mappings
+                for mapping in shadow_mappings:
+                    org_id = mapping.get('organizerId')
+                    part_ids = mapping.get('participantIds', [])
+                    if org_id and part_ids:
+                        for p_id in part_ids:
+                            mapping_query = """
+                                INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_shadow, is_lead, is_final_assessment, lead_organizer_id)
+                                VALUES (%s, %s, %s, 0, 1, 0, 0, %s)
+                                ON DUPLICATE KEY UPDATE
+                                    is_shadow = 1,
+                                    lead_organizer_id = VALUES(lead_organizer_id)
+                            """
+                            execute_write(mapping_query, (proj_id, plan_id, p_id, org_id))
+        except Exception as mapping_err:
+            print(f"Error updating resource_mapping: {mapping_err}")
+
+        try:
+            from services.notification_service import trigger_plan_requirements_notification
+            trigger_plan_requirements_notification(plan_id, [], shadow_mappings, lead_recipients, [])
+        except Exception as notify_req_err:
+            print(f"Error triggering requirements notification: {notify_req_err}")
+
+        return jsonify({
+            "success": True, 
+            "message": "Requirements notifications initiated successfully."
+        }), 200
+
+    except Exception as e:
+        print(f"Error in notify_requirements: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@scheduling_bp.route('/resource-mappings', methods=['GET'])
+def get_resource_mappings():
+    plan_id = request.args.get('plan_id')
+    if not plan_id:
+        return jsonify({"success": False, "message": "plan_id is required"}), 400
+        
+    try:
+        query = """
+            SELECT 
+                rm.stakeholder_id as participant_id,
+                ps.name as participant_name,
+                ps.role as participant_role,
+                rm.lead_organizer_id as organizer_id,
+                os.name as organizer_name,
+                os.role as organizer_role
+            FROM resource_mapping rm
+            LEFT JOIN stakeholders ps ON rm.stakeholder_id = ps.id
+            LEFT JOIN stakeholders os ON rm.lead_organizer_id = os.id
+            WHERE rm.plan_id = %s AND rm.is_shadow = 1 AND rm.lead_organizer_id IS NOT NULL
+        """
+        results = execute_query(query, (plan_id,))
+        return jsonify({"success": True, "data": results}), 200
+    except Exception as e:
+        print(f"Error fetching resource mappings: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @scheduling_bp.route('/meetings', methods=['GET'])
@@ -357,6 +516,17 @@ def get_meetings():
                 print(f"Error fetching knowledge givers for meeting {m['id']}: {kg_err}")
                 m['knowledge_giver_names'] = "N/A"
                 m['knowledge_givers'] = []
+            
+            try:
+                sh_query = "SELECT stakeholder_id FROM attendance WHERE meeting_id = %s"
+                sh_res = execute_query(sh_query, (m['id'],))
+                sh_ids = [r['stakeholder_id'] for r in sh_res] if sh_res else []
+                if m.get('organizer_id') and m['organizer_id'] not in sh_ids:
+                    sh_ids.append(m['organizer_id'])
+                m['all_stakeholder_ids'] = sh_ids
+            except Exception as err:
+                print(f"Error fetching all stakeholders for meeting {m['id']}: {err}")
+                m['all_stakeholder_ids'] = []
             
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:
@@ -722,9 +892,25 @@ def reschedule_meeting(id):
 
         if reschedule_subsequent:
             try:
-                from services.notification_service import trigger_reschedule_notifications
+                from services.notification_service import trigger_reschedule_notifications, trigger_plan_requirements_notification
                 for m_id, prop_dt in final_proposed_meetings:
                     trigger_reschedule_notifications(m_id, prop_dt, reason)
+                    
+                # Re-trigger shadow resourcing emails with the new last meeting date
+                shadow_db = execute_query("SELECT stakeholder_id, lead_organizer_id FROM resource_mapping WHERE plan_id = %s AND is_shadow = 1 AND lead_organizer_id IS NOT NULL", (plan_id,))
+                if shadow_db:
+                    org_map = {}
+                    for row in shadow_db:
+                        org_id = row['lead_organizer_id']
+                        if org_id not in org_map:
+                            org_map[org_id] = []
+                        org_map[org_id].append(row['stakeholder_id'])
+                    
+                    shadow_mappings = []
+                    for org_id, parts in org_map.items():
+                        shadow_mappings.append({'organizerId': org_id, 'participantIds': parts})
+                        
+                    trigger_plan_requirements_notification(plan_id, [], shadow_mappings, [])
             except Exception as notify_err:
                 print(f"Error triggering reschedule notifications: {notify_err}")
             msg = f"Meeting and {len(subsequent_meetings)} subsequent meetings rescheduled successfully. Participants will be notified via email."
@@ -916,4 +1102,333 @@ def submit_meeting_feedback(id):
         print(f"Error in submit_meeting_feedback: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+
+
+@scheduling_bp.route('/bulk-upload', methods=['POST'])
+def bulk_upload():
+    import pandas as pd
+    import random
+    from datetime import datetime, timedelta
+    try:
+        from services.notification_service import trigger_meeting_notifications
+        
+        organizer_id = None
+        try:
+            user_info = get_authenticated_user()
+            organizer_id = user_info['sub']
+        except Exception as e:
+            print(f"Auth error in bulk upload: {e}")
+
+        if 'files' not in request.files:
+            return jsonify({"success": False, "message": "No files uploaded."}), 400
+
+        files = request.files.getlist('files')
+        all_meeting_ids = []
+
+        for file in files:
+            if not file.filename.endswith(('.xls', '.xlsx')):
+                continue
+
+            df_meta = pd.read_excel(file, header=None, nrows=4)
+            project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
+            plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
+
+            project_name = project_name_str.split("Project Name: ")[1].strip() if "Project Name: " in str(project_name_str) else None
+            plan_name_raw = plan_name_str.split("Plan Name: ")[1].strip() if "Plan Name: " in str(plan_name_str) else None
+            import re
+            plan_name = re.sub(r'\s*\([^)]*\)$', '', plan_name_raw).strip() if plan_name_raw else None
+
+            if not project_name or not plan_name:
+                return jsonify({"success": False, "message": "Could not find Project Name and Plan Name in the first rows."}), 400
+
+            project_res = execute_query("SELECT id FROM kt_projects WHERE name = %s", (project_name,))
+            if not project_res:
+                return jsonify({"success": False, "message": f"Project '{project_name}' not found."}), 404
+            project_id = project_res[0]['id']
+
+            plan_res = execute_query("SELECT id, project_config FROM kt_plans WHERE application_name = %s AND project_id = %s", (plan_name, project_id))
+            if not plan_res:
+                return jsonify({"success": False, "message": f"Plan '{plan_name}' not found for this project."}), 404
+            plan_id = plan_res[0]['id']
+            project_config = plan_res[0].get('project_config')
+
+            file.seek(0)
+            df = pd.read_excel(file, skiprows=5)
+            df.columns = [str(c).strip() for c in df.columns]
+
+            if 'Day / Section' not in df.columns:
+                return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
+            
+            df['Day / Section'] = df['Day / Section'].ffill()
+            
+            if 'Meeting Link' in df.columns:
+                df['Meeting Link'] = df['Meeting Link'].ffill()
+
+            base_dt = datetime.now() + timedelta(days=1)
+            current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            holiday_query = "SELECT holiday_date FROM holidays"
+            holidays_result = execute_query(holiday_query, ())
+            holiday_dates = set()
+            if holidays_result:
+                for h in holidays_result:
+                    if isinstance(h['holiday_date'], str):
+                        holiday_dates.add(h['holiday_date'][:10])
+                    else:
+                        holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
+
+            grouped = df.groupby('Day / Section')
+            
+            all_stakeholder_ids = set()
+            for day_str, group in grouped:
+                day_str = str(day_str).strip()
+                if not day_str.lower().startswith('day'):
+                    continue
+
+                givers = group['Knowledge Giver'].dropna().astype(str).tolist() if 'Knowledge Giver' in df.columns else []
+                receivers = group['Knowledge Receiver'].dropna().astype(str).tolist() if 'Knowledge Receiver' in df.columns else []
+                
+                start_dates = group['Start Date'].dropna().astype(str).tolist() if 'Start Date' in df.columns else []
+                meeting_links = group['Meeting Link'].dropna().astype(str).tolist() if 'Meeting Link' in df.columns else []
+                
+                custom_start_date = None
+                for sd in start_dates:
+                    if sd.strip() and sd.strip().lower() != 'nan':
+                        custom_start_date = sd.strip()
+                        break
+                        
+                custom_meeting_link = None
+                for ml in meeting_links:
+                    if ml.strip() and ml.strip().lower() != 'nan':
+                        custom_meeting_link = ml.strip()
+                        break
+
+                all_givers = set()
+                for g in givers:
+                    all_givers.update([x.strip() for x in g.split(',') if x.strip()])
+                    
+                all_receivers = set()
+                for r in receivers:
+                    all_receivers.update([x.strip() for x in r.split(',') if r.strip()])
+                    
+                stakeholder_ids = set()
+                all_names = list(all_givers) + list(all_receivers)
+                if all_names:
+                    format_strings = ','.join(['%s'] * len(all_names))
+                    sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(all_names))
+                    if sh_res:
+                        stakeholder_ids.update([row['id'] for row in sh_res])
+                        all_stakeholder_ids.update(stakeholder_ids)
+
+                topics = group['Topic / Sub-topic Name'].dropna().astype(str).tolist() if 'Topic / Sub-topic Name' in df.columns else []
+                description = "\n".join(topics)
+                
+                desired_hour = random.randint(10, 16)
+                desired_minute = random.choice([0, 15, 30, 45])
+                desired_start = desired_hour * 60 + desired_minute
+
+                scheduled = False
+                days_checked = 0
+                final_start = desired_start
+
+                while not scheduled and days_checked < 30:
+                    while current_day.weekday() > 4 or current_day.strftime('%Y-%m-%d') in holiday_dates:
+                        current_day += timedelta(days=1)
+                    
+                    if not stakeholder_ids:
+                        scheduled = True
+                    else:
+                        format_strings_sh = ','.join(['%s'] * len(stakeholder_ids))
+                        existing_query = f"""
+                            SELECT m.scheduled_at 
+                            FROM meetings m
+                            JOIN attendance a ON m.id = a.meeting_id
+                            WHERE a.stakeholder_id IN ({format_strings_sh})
+                              AND m.scheduled_at >= %s AND m.scheduled_at < %s
+                        """
+                        day_start = current_day.strftime('%Y-%m-%d 00:00:00')
+                        day_end = (current_day + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
+                        params = tuple(list(stakeholder_ids) + [day_start, day_end])
+                        existing_meetings = execute_query(existing_query, params)
+
+                        existing_starts = []
+                        if existing_meetings:
+                            for row in existing_meetings:
+                                dt = row['scheduled_at']
+                                if isinstance(dt, str):
+                                    try:
+                                        if 'T' in dt:
+                                            dt = datetime.strptime(dt.replace('T', ' '), "%Y-%m-%d %H:%M:%S")
+                                        else:
+                                            dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+                                    except ValueError:
+                                        dt = datetime.fromisoformat(dt)
+                                existing_starts.append(dt.hour * 60 + dt.minute)
+
+                        has_overlap = False
+                        for ext_start in existing_starts:
+                            if abs(desired_start - ext_start) < 120:
+                                has_overlap = True
+                                break
+
+                        if not has_overlap:
+                            final_start = desired_start
+                            scheduled = True
+                        else:
+                            found_slot = False
+                            for slot in range(600, 1021, 15):
+                                slot_overlap = False
+                                for ext_start in existing_starts:
+                                    if abs(slot - ext_start) < 120:
+                                        slot_overlap = True
+                                        break
+                                if not slot_overlap:
+                                    final_start = slot
+                                    scheduled = True
+                                    found_slot = True
+                                    break
+                            
+                            if not found_slot:
+                                current_day += timedelta(days=1)
+                                days_checked += 1
+
+                if not scheduled:
+                    continue
+
+                if custom_start_date:
+                    try:
+                        from dateutil import parser
+                        custom_dt = parser.parse(custom_start_date)
+                        formatted_date = custom_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        hour = final_start // 60
+                        minute = final_start % 60
+                        current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                        formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    hour = final_start // 60
+                    minute = final_start % 60
+                    current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                final_meeting_link = custom_meeting_link if custom_meeting_link else 'https://meet.google.com/bulk-auto-generated'
+
+                query = """
+                    INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link, organizer_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                params = (
+                    plan_id, 
+                    f'{project_name} - {plan_name} - {day_str}', 
+                    formatted_date, 
+                    description,
+                    final_meeting_link,
+                    organizer_id
+                )
+                meeting_id = execute_write(query, params)
+                all_meeting_ids.append(meeting_id)
+
+                for sh_id in stakeholder_ids:
+                    execute_write("INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)", (meeting_id, sh_id))
+
+                try:
+                    trigger_meeting_notifications(meeting_id)
+                except Exception as notify_err:
+                    print(f"Error triggering notifications for {meeting_id}: {notify_err}")
+
+                current_day += timedelta(days=1)
+
+            if all_stakeholder_ids:
+                format_strings = ','.join(['%s'] * len(all_stakeholder_ids))
+                update_sh_query = f"UPDATE stakeholders SET project_id = %s, plan_id = %s WHERE id IN ({format_strings})"
+                update_sh_params = [project_id, plan_id] + list(all_stakeholder_ids)
+                execute_write(update_sh_query, tuple(update_sh_params))
+
+            import json
+            is_sud_mandatory = False
+            is_assessment_mandatory = False
+            
+            if isinstance(project_config, str):
+                try:
+                    project_config_dict = json.loads(project_config)
+                except Exception:
+                    project_config_dict = {}
+            elif isinstance(project_config, dict):
+                project_config_dict = project_config
+            else:
+                project_config_dict = {}
+                
+            for t in project_config_dict.get('tracks', []):
+                opts = t.get('options', {})
+                if opts.get('sud_mandatory'):
+                    is_sud_mandatory = True
+                if opts.get('assessment') or opts.get('final_assessment_mandatory'):
+                    is_assessment_mandatory = True
+
+            sud_names = set()
+            assessment_names = set()
+            
+            col_sud = None
+            for c in df.columns:
+                if c.strip().lower() in ['sud document', 'sud']:
+                    col_sud = c
+                    break
+                    
+            if col_sud:
+                for val in df[col_sud].dropna().astype(str):
+                    sud_names.update([x.strip() for x in val.split(',') if x.strip() and x.strip().lower() != 'nan'])
+
+            col_ass = None
+            for c in df.columns:
+                if c.strip().lower() in ['assessment', 'final assessment']:
+                    col_ass = c
+                    break
+
+            if col_ass:
+                for val in df[col_ass].dropna().astype(str):
+                    assessment_names.update([x.strip() for x in val.split(',') if x.strip() and x.strip().lower() != 'nan'])
+
+            sud_recipients = []
+            final_assessment_recipients = []
+            
+            if is_sud_mandatory and sud_names:
+                format_strings = ','.join(['%s'] * len(sud_names))
+                sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(sud_names))
+                if sh_res:
+                    sud_recipients = [row['id'] for row in sh_res]
+                    
+            if is_assessment_mandatory and assessment_names:
+                format_strings = ','.join(['%s'] * len(assessment_names))
+                sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(assessment_names))
+                if sh_res:
+                    final_assessment_recipients = [row['id'] for row in sh_res]
+
+            if sud_recipients or final_assessment_recipients:
+                from services.notification_service import trigger_plan_requirements_notification
+                
+                all_req_sh = set(sud_recipients + final_assessment_recipients)
+                for sh_id in all_req_sh:
+                    is_sudo = 1 if sh_id in sud_recipients else 0
+                    is_final_assessment = 1 if sh_id in final_assessment_recipients else 0
+                    
+                    mapping_query = """
+                        INSERT INTO resource_mapping (project_id, plan_id, stakeholder_id, is_sudo, is_final_assessment)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            is_sudo = VALUES(is_sudo),
+                            is_final_assessment = VALUES(is_final_assessment)
+                    """
+                    execute_write(mapping_query, (project_id, plan_id, sh_id, is_sudo, is_final_assessment))
+                
+                try:
+                    trigger_plan_requirements_notification(plan_id, sud_recipients, [], [], final_assessment_recipients)
+                except Exception as notify_req_err:
+                    print(f"Error triggering requirements notification in bulk upload: {notify_req_err}")
+
+        return jsonify({"success": True, "message": "Bulk scheduling successful!", "data": all_meeting_ids}), 201
+
+    except Exception as e:
+        print(f"Error in bulk_upload: {e}")
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 

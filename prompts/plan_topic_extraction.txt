@@ -1,12 +1,44 @@
-Below is a Knowledge Transfer plan. Extract every individual topic/session line item listed in its
-"Sessions / Topics Breakdown" tables (ignore the tables' header row and separator lines).
+Below is a Knowledge Transfer plan. Extract every individual topic/sub-topic line item and phase section listed in its schedule or breakdown into JSON objects for the plan topics table.
+
+CRITICAL EXTRACTION RULES FOR KNOWLEDGE ACQUISITION (KA) PHASE:
+1. For each Day in the Knowledge Acquisition (KA) Phase (e.g. Day 1: [Time: 2 hours]):
+   - Extract EVERY individual sub-topic bullet line (e.g. "• Overview of AI Pipelines (30 minutes)") as its OWN separate JSON object!
+   - Convert the sub-topic duration in minutes to estimated_duration_hours (string number):
+     - 15 minutes -> "0.25"
+     - 30 minutes -> "0.5"
+     - 45 minutes -> "0.75"
+     - 60 minutes -> "1"
+     - 75 minutes -> "1.25"
+     - 90 minutes -> "1.5"
+     - 120 minutes -> "2"
+   - Use the Day label (e.g. "Day 1: [Time: 2 hours]" or "Day 1: Introduction to AI Pipelines") for the "day_label" field.
+   - Use the sub-topic name (e.g. "Overview of AI Pipelines") for the "topic_name" field.
+   - DO NOT combine all sub-topics into a single row for the day! Each bullet sub-topic MUST be its own separate object.
+
+CRITICAL EXTRACTION RULES FOR POST-KA PHASES:
+2. For Final Assessment Evaluation Window:
+   - "day_label": "Day X to Day Y" (e.g. "Day 21 to Day 110")
+   - "topic_name": "Mandatory Final Assessment Evaluation Window"
+   - "estimated_duration_hours": "2160 Hours (90 Days)" (calculated as N * 24 Hours)
+
+3. For Shadow Resourcing Phase:
+   - "day_label": "Day X to Day Y (Shadow Phase)" (e.g. "Day 111 to Day 124 (Shadow Phase)")
+   - "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution"
+   - "estimated_duration_hours": "336 Hours (14 Days / 2 Weeks)"
+
+4. For Lead Resourcing Phase:
+   - "day_label": "Day X onwards (Lead Phase)" (e.g. "Day 125 onwards (Lead Phase)")
+   - "topic_name": "Independent Project Leadership & Transition Completion"
+   - "estimated_duration_hours": "Ongoing (Lead Phase)"
+
+5. PROHIBITION: DO NOT extract any bullet line starting with "Timeline:" or "• Timeline:" as an additional topic row! Ignore timeline bullet lines.
 
 Plan content:
 {generated_content}
 
 Return ONLY a JSON array of objects, each with keys:
-- "day_label" (string, e.g. "Day 1: Python Fundamentals and Core Concepts" — the section heading this topic falls under, or "General" if there are no day sections)
-- "topic_name" (string, the topic/row name, e.g. "Data Types and Variables")
-- "estimated_duration_hours" (string, e.g. "1" — use "N/A" if not specified)
+- "day_label" (string)
+- "topic_name" (string)
+- "estimated_duration_hours" (string)
 
 Do not include any explanation, only the JSON array.

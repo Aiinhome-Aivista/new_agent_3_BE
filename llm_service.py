@@ -28,7 +28,7 @@ def call_llm(prompt, stream=False):
             span.set_attribute("model_name", LLM_MODEL)
             span.set_attribute("prompt_length", len(prompt))
             
-            response = requests.post(LLM_API_URL, json=payload, timeout=500)
+            response = requests.post(LLM_API_URL, json=payload, timeout=3000)
             response.raise_for_status()
         data = response.json()
         result = data.get("response", "")

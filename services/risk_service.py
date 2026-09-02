@@ -65,8 +65,76 @@ def detect_risks_service(plan_id):
     except json.JSONDecodeError:
         import logging
         logging.warning(f"Risk detection LLM parse failure for plan {plan_id}: {llm_response[:200]}")
-        return []
+        risks = []
         
+    # === NEW RULE-BASED RISKS FOR 100% COMPLETED PLANS ===
+    is_100_percent = len(comp_data) > 0 and all(c['completion_percent'] == 100 for c in comp_data)
+    if is_100_percent:
+        try:
+            # 1. Fetch config and check options
+            proj_config_query = "SELECT p.config FROM kt_projects p JOIN kt_plans pl ON pl.project_id = p.id WHERE pl.id = %s"
+            proj_config_data = execute_query(proj_config_query, (plan_id,))
+            if proj_config_data and proj_config_data[0]['config']:
+                import json
+                config_json = json.loads(proj_config_data[0]['config'])
+                app_name = plan_data[0]['application_name'] if plan_data else ''
+                track = next((t for t in config_json.get('tracks', []) if str(t.get('name', '')).strip() == str(app_name).strip()), None)
+                
+                if track and track.get('options'):
+                    options = track['options']
+                    
+                    # 2. SUD Document Risk Check
+                    if options.get('sud_doc_upload') or options.get('upload_sud'):
+                        sud_req_query = "SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_sudo = 1"
+                        sud_req_sh = execute_query(sud_req_query, (plan_id,))
+                        for sh in sud_req_sh:
+                            sh_id = sh['stakeholder_id']
+                            sud_doc_check = execute_query("SELECT id FROM sud_documents WHERE plan_id = %s AND stakeholder_id = %s", (plan_id, sh_id))
+                            if not sud_doc_check:
+                                sh_name_data = execute_query("SELECT name FROM stakeholders WHERE id = %s", (sh_id,))
+                                sh_name = sh_name_data[0]['name'] if sh_name_data else "Unknown"
+                                risks.append({
+                                    "description": f"Participant {sh_name} has not uploaded the required SUD document for a completed plan.",
+                                    "severity": "high"
+                                })
+                                
+                    # 3. Final Assessment Risk Check
+                    if options.get('assessment') or options.get('assessment_80'):
+                        assess_req_query = "SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_final_assessment = 1"
+                        assess_req_sh = execute_query(assess_req_query, (plan_id,))
+                        
+                        plan_meta = execute_query("SELECT unlocked_on, final_deadline_extension_days FROM kt_plans WHERE id = %s", (plan_id,))
+                        if plan_meta:
+                            unlocked_on = plan_meta[0]['unlocked_on']
+                            ext_days = plan_meta[0]['final_deadline_extension_days'] or 90
+                            
+                            from datetime import datetime, timedelta
+                            deadline_missed = False
+                            if unlocked_on:
+                                deadline_date = unlocked_on + timedelta(days=ext_days)
+                                if datetime.now() > deadline_date:
+                                    deadline_missed = True
+                            
+                            for sh in assess_req_sh:
+                                sh_id = sh['stakeholder_id']
+                                assess_check = execute_query("SELECT id FROM assessment_results WHERE plan_id = %s AND stakeholder_id = %s AND assessment_type = 'final'", (plan_id, sh_id))
+                                if not assess_check:
+                                    sh_name_data = execute_query("SELECT name FROM stakeholders WHERE id = %s", (sh_id,))
+                                    sh_name = sh_name_data[0]['name'] if sh_name_data else "Unknown"
+                                    
+                                    desc = f"Participant {sh_name} has not given the final assessment. The deadline of {ext_days} days is at risk."
+                                    if deadline_missed:
+                                        desc = f"Participant {sh_name} has missed the final assessment deadline."
+                                    
+                                    risks.append({
+                                        "description": desc,
+                                        "severity": "high"
+                                    })
+        except Exception as ex:
+            import logging
+            logging.error(f"Rule-based risk evaluation failed: {str(ex)}")
+    # =========================================================
+
     saved_risks = []
     
     existing_query = "SELECT id, description, severity, status, detected_by FROM risks WHERE plan_id = %s AND status = 'open'"

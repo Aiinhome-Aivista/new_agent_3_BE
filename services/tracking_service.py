@@ -11,11 +11,27 @@ def update_completion_service(plan_id, topic, completion_percent, updated_by=Non
 
     # Check if plan is 100% completed and update unlocked_on in kt_plans
     try:
-        comp_res = execute_query(
-            "SELECT (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics, "
-            "(SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics",
-            (plan_id, plan_id)
-        )
+        comp_query = """
+            SELECT 
+                (SELECT COUNT(*) FROM completion_tracking 
+                 WHERE plan_id = %s 
+                 AND completion_percent = 100
+                 AND LOWER(topic) NOT LIKE %s
+                 AND LOWER(topic) NOT LIKE %s
+                 AND LOWER(topic) NOT LIKE %s
+                ) as completed_topics,
+                (SELECT COUNT(*) FROM plan_topics 
+                 WHERE plan_id = %s 
+                 AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+                 AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+                 AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+                ) as total_topics
+            FROM DUAL
+        """
+        comp_res = execute_query(comp_query, (
+            plan_id, '%final assessment%', '%shadow phase%', '%lead phase%',
+            plan_id, '%final assessment%', '%shadow phase%', '%lead phase%'
+        ))
         if comp_res and comp_res[0].get('total_topics'):
             c_cnt = int(comp_res[0]['completed_topics'] or 0)
             t_cnt = int(comp_res[0]['total_topics'] or 0)
@@ -42,11 +58,25 @@ def get_plan_summary_service(plan_id):
     # Get average completion
     comp_query = """
         SELECT 
-            (SELECT COUNT(*) FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100) as completed_topics,
-            (SELECT COUNT(*) FROM plan_topics WHERE plan_id = %s) as total_topics
+            (SELECT COUNT(*) FROM completion_tracking 
+             WHERE plan_id = %s 
+             AND completion_percent = 100
+             AND LOWER(topic) NOT LIKE %s
+             AND LOWER(topic) NOT LIKE %s
+             AND LOWER(topic) NOT LIKE %s
+            ) as completed_topics,
+            (SELECT COUNT(*) FROM plan_topics 
+             WHERE plan_id = %s 
+             AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+             AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+             AND LOWER(CONCAT(IFNULL(day_label, ''), ' ', IFNULL(topic_name, ''))) NOT LIKE %s
+            ) as total_topics
         FROM DUAL
     """
-    comp_res = execute_query(comp_query, (plan_id, plan_id))
+    comp_res = execute_query(comp_query, (
+        plan_id, '%final assessment%', '%shadow phase%', '%lead phase%',
+        plan_id, '%final assessment%', '%shadow phase%', '%lead phase%'
+    ))
     
     if comp_res and comp_res[0]['total_topics'] and int(comp_res[0]['total_topics']) > 0:
         avg_completion = (float(comp_res[0]['completed_topics']) / float(comp_res[0]['total_topics'])) * 100.0

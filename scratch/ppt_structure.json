@@ -1,0 +1,211 @@
+[
+  {
+    "slide": 1,
+    "texts": [
+      "Autonomous Proposal Document Creator Platform",
+      "Draft Date: July 2026"
+    ]
+  },
+  {
+    "slide": 2,
+    "texts": [
+      "Business Summary",
+      "Executive overview of the proposed solution",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "This enterprise-grade IT/AI solution is being implemented to transform program and project oversight by delivering a real-time, predictive health dashboard that integrates multi-agent intelligence, advanced memory systems, and robust governance frameworks. The system addresses critical gaps in traditional project management by providing actionable risk forecasts, progress projections, and automated escalation mechanisms, enabling organizations to proactively mitigate showstoppers and optimize resource allocation. Strategically, this solution delivers a competitive advantage through operational efficiency gains, reduced project overruns, and enhanced compliance, with a projected ROI driven by faster decision-making, lower operational costs, and improved stakeholder trust via transparent, auditable processes."
+    ]
+  },
+  {
+    "slide": 3,
+    "texts": [
+      "Client Requirements & Gap Analysis",
+      "RAG-driven competence matching against RFP requirements",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Key Client Requirements:",
+      "• Real-time program and project health dashboard with predictive risk forecasting and progress projections",
+      "• Multi-agent architecture with specialized agents for document parsing, financial analysis, risk forecasting, KPI synthesis, and reporting",
+      "• Three-tier memory system (episodic, semantic, procedural) for context retention and auditability",
+      "• Defense-in-depth governance with guardrails, observability, and cost/latency governance for reliability and compliance",
+      "• Automated escalation and showstopper detection with human-in-the-loop validation for critical risks"
+    ]
+  },
+  {
+    "slide": 4,
+    "texts": [
+      "Capability Gaps & Mitigations",
+      "Identified gaps against RFP requirements and proposed mitigations",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Capability Gaps & Mitigations:",
+      "• Identified gap in Client Requirement: 'Real-time program and project health dashboard with predictive risk forecasting and progress projections'. Mitigation: To address the predictive risk forecasting and progress projections, we can establish a new competence program focused on advanced data analytics and AI-driven forecasting tools.",
+      "• Identified gap in Client Requirement: 'Multi-agent architecture with specialized agents for document parsing, financial analysis, risk forecasting, KPI synthesis, and reporting'. Mitigation: To address the multi-agent architecture requirement, we will partner with a specialized AI integration firm to develop and deploy the specialized agents for document parsing, financial analysis, risk forecasting, KPI synthesis, and reporting.",
+      "• Identified gap in Client Requirement: 'Three-tier memory system (episodic, semantic, procedural) for context retention and auditability'. Mitigation: To address the three-tier memory system requirement, we can establish a new competence program focused on developing and integrating advanced memory architecture frameworks.",
+      "• Identified gap in Client Requirement: 'Defense-in-depth governance with guardrails, observability, and cost/latency governance for reliability and compliance'. Mitigation: To mitigate this gap, we will establish a dedicated Cloud Center of Excellence (CCoE) to develop and enforce tailored guardrails, observability frameworks, and cost/latency governance policies.",
+      "• Identified gap in Client Requirement: 'Automated escalation and showstopper detection with human-in-the-loop validation for critical risks'. Mitigation: Establish a new competence program focused on AI-driven risk assessment and human oversight integration."
+    ]
+  },
+  {
+    "slide": 5,
+    "texts": [
+      "Capability Gaps & Mitigations",
+      "Identified gaps against RFP requirements and proposed mitigations",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Capability Gaps & Mitigations:",
+      "• Identified gap in Client Requirement: 'Security and Data Protection'. Mitigation: Implement enterprise-grade zero-trust architecture, advanced data encryption, RBAC, and continuous threat detection mechanisms.",
+      "• Identified gap in Client Requirement: 'System Observability and Monitoring'. Mitigation: Deploy comprehensive distributed tracing, centralized logging, and real-time alerting dashboards across the multi-agent environment."
+    ]
+  },
+  {
+    "slide": 6,
+    "texts": [
+      "Solution Approach & Architecture",
+      "High-level implementation strategy and operational frameworks",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "01. Predictive Intelligence Engine",
+      "Core AI-driven forecasting module combining multi-agent collaboration with three-tier memory retention for contextual risk modeling. Enables real-time progress projections and automated risk detection with human-in-the-loop validation.",
+      "02. Defense-in-Depth Governance",
+      "Multi-layered security and compliance framework integrating guardrails, observability, and cost/latency governance. Ensures reliability, auditability, and regulatory adherence while maintaining system performance.",
+      "03. Scalable Real-Time Architecture",
+      "Decoupled, high-performance system designed for real-time data processing and dashboard responsiveness. Balances cost efficiency with scalability to handle enterprise-scale workloads within budget constraints."
+    ]
+  },
+  {
+    "slide": 7,
+    "texts": [
+      "High Level Design: Data Flow",
+      "Data ingestion from project management tools (Jira, MS Project) and financial systems via API connectors",
+      "▼",
+      "Multi-agent processing with specialized agents (document parsing, financial analysis, risk forecasting) storing context in three-tier memory system",
+      "▼",
+      "Real-time aggregation and projection calculations in the backend API layer with guardrail validation",
+      "▼",
+      "Dashboard visualization and alerting via React frontend with automated escalation workflows"
+    ]
+  },
+  {
+    "slide": 8,
+    "texts": [
+      "Landscape & Architecture",
+      "Reference systems architecture and integration patterns",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Presentation Layer (UI Client)",
+      "React Frontend",
+      "D3.js Visualization Library",
+      "Guardrails AI Client",
+      "Azure Front Door (CDN)",
+      "Application Logic (API Backend)",
+      "FastAPI Microservices",
+      "AWS Bedrock AgentCore",
+      "PGVector Vector Database",
+      "Redis Cache",
+      "Guardrails AI Server",
+      "Data Integration & Memory Layer",
+      "PostgreSQL (Primary Storage)",
+      "Azure Blob Storage (Episodic Memory)",
+      "Azure Cognitive Search (Semantic Memory)",
+      "Azure Event Hubs (Stream Processing)"
+    ]
+  },
+  {
+    "slide": 9,
+    "texts": [
+      "Infrastructure Approximation",
+      "Estimated cloud infrastructure components and costs",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only"
+    ]
+  },
+  {
+    "slide": 10,
+    "texts": [
+      "Project Milestones",
+      "Sequential delivery phases and target deliverables",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Design & Planning",
+      "Key Deliverables / Activities:",
+      "Stakeholder interviews, requirements finalization, architecture design, risk assessment, project plan, and governance framework documentation. Output: Detailed project charter, technical architecture blueprint, and governance policies.",
+      "Development",
+      "Key Deliverables / Activities:",
+      "Multi-agent system design, memory architecture specification, dashboard wireframes, API contracts, and proof-of-concept for core agents (document parsing, financial analysis). Output: Technical design documents, interactive prototypes, and PoC validation reports.",
+      "Testing",
+      "Key Deliverables / Activities:",
+      "Full-stack implementation of agents, memory system, dashboard, and governance layers. Includes unit/integration testing, security hardening, and performance optimization. Output: Deployable codebase, test reports, and security audit results.",
+      "Deployment",
+      "Key Deliverables / Activities:",
+      "End-to-end system testing, predictive risk forecasting validation, escalation workflow testing, and compliance checks. Output: Test cases, validation reports, and compliance certificates.",
+      "Training",
+      "Key Deliverables / Activities:",
+      "Production deployment, user training, documentation delivery, and post-deployment support plan. Output: Deployed system, user manuals, training materials, and support SLA documentation."
+    ]
+  },
+  {
+    "slide": 11,
+    "texts": [
+      "Effort & Person-Hour Conversion",
+      "Allocated program FTE structure, rate cards, and financial sizing",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "Disclaimer: Please note that this high-level estimate is subject to change as it depends on detailed client requirements. All resource and pricing calculations reflect the median baseline for similar enterprise integrations."
+    ]
+  },
+  {
+    "slide": 12,
+    "texts": [
+      "Skills Inventory & Competency Mapping",
+      "Required technical capabilities grounded in organizational assets",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only"
+    ]
+  },
+  {
+    "slide": 13,
+    "texts": [
+      "Reference Architecture",
+      "Enterprise logical data patterns",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "System Data Flow & Orchestration Architecture"
+    ]
+  },
+  {
+    "slide": 14,
+    "texts": [
+      "Landscape Architecture (AWS Cloud Platform)",
+      "AWS Native Services & Integration Topology",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "AWS Cloud Native Deployment Topology"
+    ]
+  },
+  {
+    "slide": 15,
+    "texts": [
+      "Case Study 1: Agentic AI Virtual KT Manager (Managed Services / IT Services)",
+      "Past credentials and successful delivery outcomes",
+      "Solution Advisory  |  Autonomous Bid Lifecycle Platform  |  AI Draft - For Internal Review Only",
+      "High Level Summary",
+      "Business Problem",
+      "• High manual overhead in managing Knowledge Transfer (KT) and reverse-KT processes across engagements",
+      "• Risk of KT gaps going undetected before SLA sign-off due to lack of automated tracking",
+      "• Subjective and inconsistent completion tracking and team assessments",
+      "• Delayed risk identification and escalation in KT lifecycle",
+      "Our Approach",
+      "• Adopted a hierarchical multi-agent architecture to decompose KT lifecycle into specialist responsibilities (planning, scheduling, tracking, assessment, reporting, conversation)",
+      "• Implemented Plan-and-Execute sub-pipelines for structured, multi-step KT workflows with human-in-the-loop checkpoints",
+      "• Used RAG (Retrieval-Augmented Generation) to ground AI responses in authoritative KT documentation and ticket logs",
+      "• Designed a control loop (Observe → Reason → Plan → Act → Evaluate → Update Memory → Repeat) for each agent to ensure continuous improvement",
+      "Technical Architecture",
+      "Source/Ingestion: KT documents (PDF/DOCX/XLSX), ticket logs (ServiceNow/Jira), and stakeholder data are ingested via API or upload into a vector store for RAG and a relational database for structured state management",
+      "Storage/Processing: Structured state (stakeholders, attendance, completion %, scores) is stored in a relational database, while unstructured KT documentation and logs are stored in a vector database for retrieval-augmented generation (RAG) and contextual grounding of AI responses",
+      "Consumption/Reporting: Final KT assessment reports, weekly status updates, and risk escalations are generated and persisted in object storage, with human-in-the-loop checkpoints for approval and sign-off",
+      "Key Technologies",
+      "• Llama 3.x / Mistral / Qwen (LLM models)",
+      "• vLLM (LLM serving framework)",
+      "• Vector Database (e.g., Pinecone, Weaviate, or Milvus) for RAG",
+      "Benefits/Outcome",
+      "• Reduced manual program management overhead by automating end-to-end KT lifecycle management",
+      "• Eliminated undetected KT gaps through continuous tracking and objective, data-driven completion assessments",
+      "• Early risk identification and escalation via proactive monitoring and AI-driven analysis"
+    ]
+  },
+  {
+    "slide": 16,
+    "texts": [
+      "Thank You"
+    ]
+  }
+]
