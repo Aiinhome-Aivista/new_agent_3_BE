@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from db import execute_query, execute_write, get_connection
+import io
 import random
 import string
 import bcrypt
@@ -496,3 +497,55 @@ def upload_stakeholders():
         logger.error(f"Error uploading stakeholders: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+@stakeholder_bp.route('/template', methods=['GET'])
+def download_template():
+    try:
+        import openpyxl
+        from openpyxl.worksheet.datavalidation import DataValidation
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Stakeholders"
+
+        # Headers
+        ws.append(["Name", "Email", "Role"])
+
+        # Add Data Validation for the Role column (Column C)
+        roles = [
+            "Delivery / Engagement Manager",
+            "Outgoing SME (Knowledge Giver)",
+            "Incoming Team Member (Knowledge Receiver)",
+            "PwC Leadership"
+        ]
+        
+        # Create validation
+        dv = DataValidation(type="list", formula1=f'"{",".join(roles)}"', allow_blank=True)
+        dv.error = 'Your entry is not in the list'
+        dv.errorTitle = 'Invalid Entry'
+        dv.prompt = 'Please select from the list'
+        dv.promptTitle = 'List Selection'
+
+        # Apply to column C (excluding header)
+        ws.add_data_validation(dv)
+        dv.add('C2:C1000') # Applying it to a reasonable number of rows
+
+        # Adjust column widths
+        ws.column_dimensions['A'].width = 25
+        ws.column_dimensions['B'].width = 35
+        ws.column_dimensions['C'].width = 45
+
+        # Save to memory
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name="stakeholders_template.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        logger.error(f"Error generating template: {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
