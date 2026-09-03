@@ -467,17 +467,21 @@ def upload_stakeholders():
                 stakeholder_id = dup_res[0]['id']
             else:
                 conn = get_connection()
-                cursor = conn.cursor(dictionary=True)
-                insert_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
-                cursor.execute(insert_query, (name, email, role))
-                stakeholder_id = cursor.lastrowid
-                
-                # Automatically create the user and send welcome email
-                create_user_for_stakeholder(cursor, name, email, role)
-                
-                conn.commit()
-                cursor.close()
-                conn.close()
+                try:
+                    cursor = conn.cursor(dictionary=True)
+                    insert_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
+                    cursor.execute(insert_query, (name, email, role))
+                    stakeholder_id = cursor.lastrowid
+                    
+                    # Automatically create the user and send welcome email
+                    create_user_for_stakeholder(cursor, name, email, role)
+                    
+                    conn.commit()
+                finally:
+                    if 'cursor' in locals() and cursor:
+                        cursor.close()
+                    if conn:
+                        conn.close()
                 
             if role == "Outgoing SME (Knowledge Giver)":
                 giver_ids.append(stakeholder_id)
