@@ -130,6 +130,7 @@ class JiraService:
                         "status": fields.get("status", {}).get("name", "Unknown") if fields.get("status") else "Unknown",
                         "statusCategory": fields.get("status", {}).get("statusCategory", {}).get("name") if fields.get("status") else "",
                         "assignee": fields.get("assignee", {}).get("displayName", "Unassigned") if fields.get("assignee") else "Unassigned",
+                        "assigneeEmail": fields.get("assignee", {}).get("emailAddress", "") if fields.get("assignee") else "",
                         "priority": fields.get("priority", {}).get("name", "Medium") if fields.get("priority") else "Medium",
                         "issueType": fields.get("issuetype", {}).get("name", "Task") if fields.get("issuetype") else "Task",
                         "created": fields.get("created"),
