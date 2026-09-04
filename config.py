@@ -43,3 +43,6 @@ class Config:
     
     # AI Assessment Configuration
     ASSESSMENT_QUESTION_COUNT = int(os.getenv("ASSESSMENT_QUESTION_COUNT", "5"))
+
+    # Jira Configuration
+    JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "")
