@@ -1150,8 +1150,31 @@ def bulk_upload():
                 log_s3_upload(original_name, ext, s3_key, str(organizer_id) if organizer_id else 'System', 'Scheduling Bulk Upload')
             
             file.stream.seek(0)
+            file.seek(0)
 
-            df_meta = pd.read_excel(file, header=None, nrows=4)
+            xl = pd.ExcelFile(file)
+            sheet_names = xl.sheet_names
+
+            schedule_sheet = None
+            stakeholder_sheet = None
+
+            for sname in sheet_names:
+                try:
+                    file.seek(0)
+                    test_df = pd.read_excel(file, sheet_name=sname, nrows=10, header=None)
+                    text_content = " ".join([str(val) for val in test_df.values.flatten() if pd.notna(val)])
+                    if "Project Name:" in text_content or "Day / Section" in text_content or "Day/Section" in text_content:
+                        schedule_sheet = sname
+                    elif "Knowledge Giver" in text_content and "Knowledge Receiver" in text_content and "Name" in text_content:
+                        stakeholder_sheet = sname
+                except Exception:
+                    pass
+
+            if not schedule_sheet:
+                schedule_sheet = sheet_names[1] if len(sheet_names) > 1 else sheet_names[0]
+
+            file.seek(0)
+            df_meta = pd.read_excel(file, sheet_name=schedule_sheet, header=None, nrows=4)
             project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
             plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
 
@@ -1175,8 +1198,23 @@ def bulk_upload():
             project_config = plan_res[0].get('project_config')
 
             file.seek(0)
-            df = pd.read_excel(file, skiprows=5)
+            df = pd.read_excel(file, sheet_name=schedule_sheet, skiprows=5)
             df.columns = [str(c).strip() for c in df.columns]
+
+            sheet1_givers = []
+            sheet1_receivers = []
+            if stakeholder_sheet:
+                try:
+                    file.seek(0)
+                    df_s1 = pd.read_excel(file, sheet_name=stakeholder_sheet)
+                    df_s1.columns = [str(c).strip() for c in df_s1.columns]
+                    if 'Name' in df_s1.columns:
+                        if 'Knowledge Giver' in df_s1.columns:
+                            sheet1_givers = df_s1[df_s1['Knowledge Giver'].astype(str).str.strip().str.lower() == 'yes']['Name'].dropna().astype(str).tolist()
+                        if 'Knowledge Receiver' in df_s1.columns:
+                            sheet1_receivers = df_s1[df_s1['Knowledge Receiver'].astype(str).str.strip().str.lower() == 'yes']['Name'].dropna().astype(str).tolist()
+                except Exception as err:
+                    print(f"Error reading stakeholder sheet: {err}")
 
             if 'Day / Section' not in df.columns:
                 return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
@@ -1227,11 +1265,15 @@ def bulk_upload():
 
                 all_givers = set()
                 for g in givers:
-                    all_givers.update([x.strip() for x in g.split(',') if x.strip()])
+                    all_givers.update([x.strip() for x in g.split(',') if x.strip() and x.strip().lower() != 'nan' and not x.strip().startswith('=')])
+                if not all_givers and sheet1_givers:
+                    all_givers.update(sheet1_givers)
                     
                 all_receivers = set()
                 for r in receivers:
-                    all_receivers.update([x.strip() for x in r.split(',') if r.strip()])
+                    all_receivers.update([x.strip() for x in r.split(',') if x.strip() and x.strip().lower() != 'nan' and not x.strip().startswith('=')])
+                if not all_receivers and sheet1_receivers:
+                    all_receivers.update(sheet1_receivers)
                     
                 stakeholder_ids = set()
                 all_names = list(all_givers) + list(all_receivers)
