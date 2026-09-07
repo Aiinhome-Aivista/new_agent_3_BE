@@ -24,6 +24,28 @@ def upload_holiday_list():
         if not uploaded_files:
             return jsonify({"success": False, "message": "No file uploaded"}), 400
             
+        from utils.s3_utils import upload_to_s3, log_s3_upload
+        import uuid
+        import os
+        bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+        agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+
+        for f in uploaded_files:
+            original_name = os.path.basename(f.filename)
+            extracted_name = os.path.splitext(original_name)[0]
+            ext = os.path.splitext(original_name)[1].lower()
+            safe_filename = f"holiday_upload_{uuid.uuid4().hex[:8]}_{original_name}"
+            
+            s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+            s3_key = f"{s3_base_path}/Holiday/{safe_filename}"
+            
+            success, msg = upload_to_s3(f.stream, bucket_name, s3_key)
+            if success:
+                log_s3_upload(original_name, ext, s3_key, 'System', 'Holiday Bulk Upload')
+            
+            f.stream.seek(0)
+            
         extracted_info = extract_holiday_info_from_doc_service(uploaded_files)
         return jsonify({"success": True, "data": extracted_info}), 200
         

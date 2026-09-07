@@ -1130,6 +1130,27 @@ def bulk_upload():
             if not file.filename.endswith(('.xls', '.xlsx')):
                 continue
 
+            from utils.s3_utils import upload_to_s3, log_s3_upload
+            import uuid
+            import os
+            bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+            base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+            agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+            
+            original_name = os.path.basename(file.filename)
+            extracted_name = os.path.splitext(original_name)[0]
+            ext = os.path.splitext(original_name)[1].lower()
+            safe_filename = f"schedule_upload_{uuid.uuid4().hex[:8]}_{original_name}"
+            
+            s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+            s3_key = f"{s3_base_path}/Scheduling/{safe_filename}"
+            
+            success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
+            if success:
+                log_s3_upload(original_name, ext, s3_key, str(organizer_id) if organizer_id else 'System', 'Scheduling Bulk Upload')
+            
+            file.stream.seek(0)
+
             df_meta = pd.read_excel(file, header=None, nrows=4)
             project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
             plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
