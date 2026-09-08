@@ -15,6 +15,48 @@ class Config:
     DB_PASSWORD = os.getenv("DB_PASSWORD", "your_mysql_password")
     DB_NAME = os.getenv("DB_NAME", "kt_manager_db")
     
+    # Provider Flags
+    CLOUD_PROVIDER = os.getenv("CLOUD_PROVIDER", "DEFAULT")
+    DB_PROVIDER = os.getenv("DB_PROVIDER", "DEFAULT")
+
+    # Database Configuration Keys
+    # Local
+    MYSQL_HOST = os.getenv("MYSQL_HOST", DB_HOST)
+    MYSQL_PORT = os.getenv("MYSQL_PORT", DB_PORT)
+    MYSQL_USER = os.getenv("MYSQL_USER", DB_USER)
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", DB_PASSWORD)
+    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", DB_NAME)
+
+    # AWS RDS
+    AWS_RDS_HOST = os.getenv("AWS_RDS_HOST")
+    AWS_RDS_PORT = os.getenv("AWS_RDS_PORT", "3306")
+    AWS_RDS_USER = os.getenv("AWS_RDS_USER")
+    AWS_RDS_PASSWORD = os.getenv("AWS_RDS_PASSWORD")
+    AWS_RDS_DATABASE = os.getenv("AWS_RDS_DATABASE")
+
+    # Azure DB
+    AZURE_DB_HOST = os.getenv("AZURE_DB_HOST")
+    AZURE_DB_PORT = os.getenv("AZURE_DB_PORT", "3306")
+    AZURE_DB_USER = os.getenv("AZURE_DB_USER")
+    AZURE_DB_PASSWORD = os.getenv("AZURE_DB_PASSWORD")
+    AZURE_DB_DATABASE = os.getenv("AZURE_DB_DATABASE")
+
+    # Storage Configuration Keys
+    # AWS Storage
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME")
+    AWS_S3_BASE_FOLDER = os.getenv("AWS_S3_BASE_FOLDER")
+    AWS_S3_AGENT_FOLDER = os.getenv("AWS_S3_AGENT_FOLDER")
+
+    # Azure Storage
+    AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    AZURE_CONTAINER_NAME = os.getenv("AZURE_CONTAINER_NAME")
+
+    # Local Storage
+    UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
+
     LLM_API_URL = os.getenv("LLM_API_URL", "http://122.163.121.176:3041/api/generate")
     LLM_MODEL = os.getenv("LLM_MODEL", "mistral-small:24b")
     
