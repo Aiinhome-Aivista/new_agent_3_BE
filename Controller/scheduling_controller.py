@@ -1203,18 +1203,6 @@ def bulk_upload():
 
             sheet1_givers = []
             sheet1_receivers = []
-            if stakeholder_sheet:
-                try:
-                    file.seek(0)
-                    df_s1 = pd.read_excel(file, sheet_name=stakeholder_sheet)
-                    df_s1.columns = [str(c).strip() for c in df_s1.columns]
-                    if 'Name' in df_s1.columns:
-                        if 'Knowledge Giver' in df_s1.columns:
-                            sheet1_givers = df_s1[df_s1['Knowledge Giver'].astype(str).str.strip().str.lower() == 'yes']['Name'].dropna().astype(str).tolist()
-                        if 'Knowledge Receiver' in df_s1.columns:
-                            sheet1_receivers = df_s1[df_s1['Knowledge Receiver'].astype(str).str.strip().str.lower() == 'yes']['Name'].dropna().astype(str).tolist()
-                except Exception as err:
-                    print(f"Error reading stakeholder sheet: {err}")
 
             if 'Day / Section' not in df.columns:
                 return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
@@ -1237,7 +1225,7 @@ def bulk_upload():
                     else:
                         holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
 
-            grouped = df.groupby('Day / Section')
+            grouped = df.groupby('Day / Section', sort=False)
             
             all_stakeholder_ids = set()
             for day_str, group in grouped:
@@ -1265,15 +1253,11 @@ def bulk_upload():
 
                 all_givers = set()
                 for g in givers:
-                    all_givers.update([x.strip() for x in g.split(',') if x.strip() and x.strip().lower() != 'nan' and not x.strip().startswith('=')])
-                if not all_givers and sheet1_givers:
-                    all_givers.update(sheet1_givers)
+                    all_givers.update([x.strip() for x in g.split(',') if x.strip() and x.strip().lower() != 'nan'])
                     
                 all_receivers = set()
                 for r in receivers:
-                    all_receivers.update([x.strip() for x in r.split(',') if x.strip() and x.strip().lower() != 'nan' and not x.strip().startswith('=')])
-                if not all_receivers and sheet1_receivers:
-                    all_receivers.update(sheet1_receivers)
+                    all_receivers.update([x.strip() for x in r.split(',') if x.strip() and x.strip().lower() != 'nan'])
                     
                 stakeholder_ids = set()
                 all_names = list(all_givers) + list(all_receivers)
@@ -1364,6 +1348,7 @@ def bulk_upload():
                         from dateutil import parser
                         custom_dt = parser.parse(custom_start_date)
                         formatted_date = custom_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        current_day = custom_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     except Exception:
                         hour = final_start // 60
                         minute = final_start % 60
@@ -1409,25 +1394,7 @@ def bulk_upload():
                 execute_write(update_sh_query, tuple(update_sh_params))
 
             import json
-            is_sud_mandatory = False
-            is_assessment_mandatory = False
-            
-            if isinstance(project_config, str):
-                try:
-                    project_config_dict = json.loads(project_config)
-                except Exception:
-                    project_config_dict = {}
-            elif isinstance(project_config, dict):
-                project_config_dict = project_config
-            else:
-                project_config_dict = {}
-                
-            for t in project_config_dict.get('tracks', []):
-                opts = t.get('options', {})
-                if opts.get('sud_mandatory'):
-                    is_sud_mandatory = True
-                if opts.get('assessment') or opts.get('final_assessment_mandatory'):
-                    is_assessment_mandatory = True
+
 
             sud_names = set()
             assessment_names = set()
@@ -1455,13 +1422,13 @@ def bulk_upload():
             sud_recipients = []
             final_assessment_recipients = []
             
-            if is_sud_mandatory and sud_names:
+            if sud_names:
                 format_strings = ','.join(['%s'] * len(sud_names))
                 sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(sud_names))
                 if sh_res:
                     sud_recipients = [row['id'] for row in sh_res]
                     
-            if is_assessment_mandatory and assessment_names:
+            if assessment_names:
                 format_strings = ','.join(['%s'] * len(assessment_names))
                 sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(assessment_names))
                 if sh_res:
