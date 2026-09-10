@@ -1130,7 +1130,51 @@ def bulk_upload():
             if not file.filename.endswith(('.xls', '.xlsx')):
                 continue
 
-            df_meta = pd.read_excel(file, header=None, nrows=4)
+            from utils.s3_utils import upload_to_s3, log_s3_upload
+            import uuid
+            import os
+            bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+            base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+            agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+            
+            original_name = os.path.basename(file.filename)
+            extracted_name = os.path.splitext(original_name)[0]
+            ext = os.path.splitext(original_name)[1].lower()
+            safe_filename = f"schedule_upload_{uuid.uuid4().hex[:8]}_{original_name}"
+            
+            s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+            s3_key = f"{s3_base_path}/Scheduling/{safe_filename}"
+            
+            success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
+            if success:
+                log_s3_upload(original_name, ext, s3_key, str(organizer_id) if organizer_id else 'System', 'Scheduling Bulk Upload')
+            
+            file.stream.seek(0)
+            file.seek(0)
+
+            xl = pd.ExcelFile(file)
+            sheet_names = xl.sheet_names
+
+            schedule_sheet = None
+            stakeholder_sheet = None
+
+            for sname in sheet_names:
+                try:
+                    file.seek(0)
+                    test_df = pd.read_excel(file, sheet_name=sname, nrows=10, header=None)
+                    text_content = " ".join([str(val) for val in test_df.values.flatten() if pd.notna(val)])
+                    if "Project Name:" in text_content or "Day / Section" in text_content or "Day/Section" in text_content:
+                        schedule_sheet = sname
+                    elif "Knowledge Giver" in text_content and "Knowledge Receiver" in text_content and "Name" in text_content:
+                        stakeholder_sheet = sname
+                except Exception:
+                    pass
+
+            if not schedule_sheet:
+                schedule_sheet = sheet_names[1] if len(sheet_names) > 1 else sheet_names[0]
+
+            file.seek(0)
+            df_meta = pd.read_excel(file, sheet_name=schedule_sheet, header=None, nrows=4)
             project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
             plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
 
@@ -1154,8 +1198,11 @@ def bulk_upload():
             project_config = plan_res[0].get('project_config')
 
             file.seek(0)
-            df = pd.read_excel(file, skiprows=5)
+            df = pd.read_excel(file, sheet_name=schedule_sheet, skiprows=5)
             df.columns = [str(c).strip() for c in df.columns]
+
+            sheet1_givers = []
+            sheet1_receivers = []
 
             if 'Day / Section' not in df.columns:
                 return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
@@ -1178,7 +1225,7 @@ def bulk_upload():
                     else:
                         holiday_dates.add(h['holiday_date'].strftime('%Y-%m-%d'))
 
-            grouped = df.groupby('Day / Section')
+            grouped = df.groupby('Day / Section', sort=False)
             
             all_stakeholder_ids = set()
             for day_str, group in grouped:
@@ -1206,11 +1253,11 @@ def bulk_upload():
 
                 all_givers = set()
                 for g in givers:
-                    all_givers.update([x.strip() for x in g.split(',') if x.strip()])
+                    all_givers.update([x.strip() for x in g.split(',') if x.strip() and x.strip().lower() != 'nan'])
                     
                 all_receivers = set()
                 for r in receivers:
-                    all_receivers.update([x.strip() for x in r.split(',') if r.strip()])
+                    all_receivers.update([x.strip() for x in r.split(',') if x.strip() and x.strip().lower() != 'nan'])
                     
                 stakeholder_ids = set()
                 all_names = list(all_givers) + list(all_receivers)
@@ -1301,6 +1348,7 @@ def bulk_upload():
                         from dateutil import parser
                         custom_dt = parser.parse(custom_start_date)
                         formatted_date = custom_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        current_day = custom_dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     except Exception:
                         hour = final_start // 60
                         minute = final_start % 60
@@ -1346,25 +1394,7 @@ def bulk_upload():
                 execute_write(update_sh_query, tuple(update_sh_params))
 
             import json
-            is_sud_mandatory = False
-            is_assessment_mandatory = False
-            
-            if isinstance(project_config, str):
-                try:
-                    project_config_dict = json.loads(project_config)
-                except Exception:
-                    project_config_dict = {}
-            elif isinstance(project_config, dict):
-                project_config_dict = project_config
-            else:
-                project_config_dict = {}
-                
-            for t in project_config_dict.get('tracks', []):
-                opts = t.get('options', {})
-                if opts.get('sud_mandatory'):
-                    is_sud_mandatory = True
-                if opts.get('assessment') or opts.get('final_assessment_mandatory'):
-                    is_assessment_mandatory = True
+
 
             sud_names = set()
             assessment_names = set()
@@ -1392,13 +1422,13 @@ def bulk_upload():
             sud_recipients = []
             final_assessment_recipients = []
             
-            if is_sud_mandatory and sud_names:
+            if sud_names:
                 format_strings = ','.join(['%s'] * len(sud_names))
                 sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(sud_names))
                 if sh_res:
                     sud_recipients = [row['id'] for row in sh_res]
                     
-            if is_assessment_mandatory and assessment_names:
+            if assessment_names:
                 format_strings = ','.join(['%s'] * len(assessment_names))
                 sh_res = execute_query(f"SELECT id FROM stakeholders WHERE name IN ({format_strings})", tuple(assessment_names))
                 if sh_res:

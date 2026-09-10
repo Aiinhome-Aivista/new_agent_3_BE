@@ -424,6 +424,27 @@ def upload_stakeholders():
 
     
     try:
+        from utils.s3_utils import upload_to_s3, log_s3_upload
+        import uuid
+        import os
+        bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+        agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+
+        original_name = os.path.basename(file.filename)
+        extracted_name = os.path.splitext(original_name)[0]
+        ext = os.path.splitext(original_name)[1].lower()
+        safe_filename = f"stakeholder_upload_{uuid.uuid4().hex[:8]}_{original_name}"
+        
+        s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+        s3_key = f"{s3_base_path}/Stakeholders/{safe_filename}"
+        
+        success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
+        if success:
+            log_s3_upload(original_name, ext, s3_key, 'System', 'Stakeholder Bulk Upload')
+        
+        file.stream.seek(0)
+        
         import openpyxl
         wb = openpyxl.load_workbook(file)
         sheet = wb.active
@@ -467,17 +488,21 @@ def upload_stakeholders():
                 stakeholder_id = dup_res[0]['id']
             else:
                 conn = get_connection()
-                cursor = conn.cursor(dictionary=True)
-                insert_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
-                cursor.execute(insert_query, (name, email, role))
-                stakeholder_id = cursor.lastrowid
-                
-                # Automatically create the user and send welcome email
-                create_user_for_stakeholder(cursor, name, email, role)
-                
-                conn.commit()
-                cursor.close()
-                conn.close()
+                try:
+                    cursor = conn.cursor(dictionary=True)
+                    insert_query = "INSERT INTO stakeholders (name, email, role) VALUES (%s, %s, %s)"
+                    cursor.execute(insert_query, (name, email, role))
+                    stakeholder_id = cursor.lastrowid
+                    
+                    # Automatically create the user and send welcome email
+                    create_user_for_stakeholder(cursor, name, email, role)
+                    
+                    conn.commit()
+                finally:
+                    if 'cursor' in locals() and cursor:
+                        cursor.close()
+                    if conn:
+                        conn.close()
                 
             if role == "Outgoing SME (Knowledge Giver)":
                 giver_ids.append(stakeholder_id)

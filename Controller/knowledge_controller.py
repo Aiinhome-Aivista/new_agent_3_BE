@@ -73,6 +73,25 @@ def upload_document():
                 text = "\n".join(kb_chunks)
                 filename = 'confluence_auto_sync'
             else:
+                from utils.s3_utils import upload_to_s3, log_s3_upload
+                bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+                base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+                agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+                
+                original_name = os.path.basename(file.filename)
+                safe_filename = f"plan_{plan_id}_{uuid.uuid4().hex[:8]}_{original_name}"
+                extracted_name = os.path.splitext(original_name)[0]
+                ext = os.path.splitext(original_name)[1].lower()
+                s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+                s3_key = f"{s3_base_path}/KB/{safe_filename}"
+                
+                success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
+                if not success:
+                    return jsonify({"success": False, "message": f"S3 upload failed: {msg}"}), 500
+                    
+                log_s3_upload(original_name, ext, s3_key, str(manager_id), 'Knowledge Base')
+                file.stream.seek(0)
+
                 ext = os.path.splitext(filename)[1].lower()
                 text = ""
                 

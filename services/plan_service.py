@@ -104,7 +104,7 @@ def parse_topics_directly_from_content(generated_content):
         ka_last_day = max(ka_last_day, day_num)
         
         # Find all bullet lines: • Sub-topic Name (N minutes)
-        bullet_matches = re.findall(r'[•\*]\s*([^\n\(]+?)\s*\((?:Part\s+\d+\s*-\s*)?(\d+)\s*minutes?\)', block_strip, re.IGNORECASE)
+        bullet_matches = re.findall(r'[•\*\-\ufffd]\s*([^\n\(]+?)\s*\((?:Part\s+\d+\s*-\s*)?(\d+)\s*minutes?\)', block_strip, re.IGNORECASE)
         
         if bullet_matches:
             for sub_name, mins_str in bullet_matches:

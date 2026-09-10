@@ -80,34 +80,43 @@ def upload_sud_document():
         except (ValueError, TypeError):
             pass
 
-    sud_folder = os.path.join(os.getcwd(), 'sud_documents')
-    os.makedirs(sud_folder, exist_ok=True)
-
     results = []
     try:
+        from utils.s3_utils import upload_to_s3, log_s3_upload
+        bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+        agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+
         for file in files:
             if file.filename == '':
                 continue
                 
             original_name = os.path.basename(file.filename)
             safe_filename = f"plan_{plan_id}_{uuid.uuid4().hex[:8]}_{original_name}"
-            dest_path = os.path.join(sud_folder, safe_filename)
-            file.save(dest_path)
             
-            rel_file_path = f"sud_documents/{safe_filename}"
+            extracted_name = os.path.splitext(original_name)[0]
+            ext = os.path.splitext(original_name)[1].lower()
+            s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
+            s3_key = f"{s3_base_path}/SUD/{safe_filename}"
+            
+            success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
+            if not success:
+                return jsonify({"success": False, "message": f"S3 upload failed: {msg}"}), 500
+            
+            log_s3_upload(original_name, ext, s3_key, str(stakeholder_id), 'SUD')
             
             query = """
                 INSERT INTO sud_documents (project_id, plan_id, stakeholder_id, file_path)
                 VALUES (%s, %s, %s, %s)
             """
-            doc_db_id = execute_write(query, (project_id, plan_id, stakeholder_id, rel_file_path))
+            doc_db_id = execute_write(query, (project_id, plan_id, stakeholder_id, s3_key))
             
             results.append({
                 "id": doc_db_id,
                 "plan_id": plan_id,
                 "project_id": project_id,
                 "stakeholder_id": stakeholder_id,
-                "file_path": rel_file_path,
+                "file_path": s3_key,
                 "filename": original_name
             })
             
@@ -152,6 +161,10 @@ def get_sud_documents(plan_id):
             docs = execute_query(query, (plan_id,))
 
         formatted = []
+        from utils.s3_utils import generate_presigned_url
+        bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
+        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+
         for d in docs:
             fp = d.get('file_path') or ''
             raw_filename = os.path.basename(fp)
@@ -161,8 +174,17 @@ def get_sud_documents(plan_id):
             else:
                 filename = raw_filename
             
+            download_url = fp
+            if fp.startswith(base_folder):
+                presigned = generate_presigned_url(bucket_name, fp)
+                if presigned:
+                    download_url = presigned
+            elif fp.startswith("sud_documents/"):
+                download_url = f"/static/{fp}" # Just a fallback if local files were meant to be accessible
+            
             d_copy = dict(d)
             d_copy['filename'] = filename
+            d_copy['file_path'] = download_url
             d_copy['kt_day'] = 'SUD Document'
             formatted.append(d_copy)
             

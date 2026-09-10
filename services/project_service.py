@@ -19,8 +19,9 @@ def create_project(data, user_id):
         print(f"Error creating project: {e}")
         return {"success": False, "message": str(e)}
     finally:
-        if conn:
+        if 'cursor' in locals() and cursor:
             cursor.close()
+        if conn:
             conn.close()
 
 def filter_checked_options(data):
@@ -98,8 +99,9 @@ def update_project(project_id, data):
         print(f"Error updating project: {e}")
         return {"success": False, "message": str(e)}
     finally:
-        if conn:
+        if 'cursor' in locals() and cursor:
             cursor.close()
+        if conn:
             conn.close()
 
 def get_projects():
@@ -132,8 +134,9 @@ def get_projects():
         print(f"Error fetching projects: {e}")
         return {"success": False, "message": str(e)}
     finally:
-        if conn:
+        if 'cursor' in locals() and cursor:
             cursor.close()
+        if conn:
             conn.close()
 
 def get_project_by_id(project_id):
@@ -171,6 +174,7 @@ def get_project_by_id(project_id):
         print(f"Error fetching project: {e}")
         return {"success": False, "message": str(e)}
     finally:
-        if conn:
+        if 'cursor' in locals() and cursor:
             cursor.close()
+        if conn:
             conn.close()
