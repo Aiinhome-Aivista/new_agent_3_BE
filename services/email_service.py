@@ -3,8 +3,13 @@ import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import Config
+import threading
+import time
 
 logger = logging.getLogger(__name__)
+
+# Global lock to serialize email sending to avoid Gmail SMTP rate limiting and connection drops
+_email_lock = threading.Lock()
 
 class EmailService:
     @staticmethod
@@ -15,7 +20,11 @@ class EmailService:
             bool: True if email sent successfully, False otherwise.
         """
         server = None
+        _email_lock.acquire()
         try:
+            # We add a 2-second delay to avoid Google's "4.3.0 Temporary System Problem" and rate-limiting
+            time.sleep(2)
+            
             # Check for missing configuration
             if not Config.SMTP_SERVER or not Config.SMTP_PORT:
                 logger.error("SMTP Connection Failed: SMTP_SERVER or SMTP_PORT is not configured.")
@@ -83,3 +92,4 @@ class EmailService:
                     server.quit()
                 except Exception:
                     pass
+            _email_lock.release()

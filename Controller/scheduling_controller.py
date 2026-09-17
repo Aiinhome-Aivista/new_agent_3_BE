@@ -1174,9 +1174,17 @@ def bulk_upload():
                 schedule_sheet = sheet_names[1] if len(sheet_names) > 1 else sheet_names[0]
 
             file.seek(0)
-            df_meta = pd.read_excel(file, sheet_name=schedule_sheet, header=None, nrows=4)
+            df_meta = pd.read_excel(file, sheet_name=schedule_sheet, header=None, nrows=5)
             project_name_str = df_meta.iloc[0, 0] if not pd.isna(df_meta.iloc[0, 0]) else ""
             plan_name_str = df_meta.iloc[2, 0] if not pd.isna(df_meta.iloc[2, 0]) else ""
+            
+            meeting_link_option = "Single Link for All Days"
+            if df_meta.shape[0] > 4:
+                row_5 = df_meta.iloc[4].tolist()
+                for val in row_5:
+                    if str(val).strip() in ["Single Link for All Days", "Different Link for Each Day"]:
+                        meeting_link_option = str(val).strip()
+                        break
 
             project_name = project_name_str.split("Project Name: ")[1].strip() if "Project Name: " in str(project_name_str) else None
             plan_name_raw = plan_name_str.split("Plan Name: ")[1].strip() if "Plan Name: " in str(plan_name_str) else None
@@ -1197,8 +1205,14 @@ def bulk_upload():
             plan_id = plan_res[0]['id']
             project_config = plan_res[0].get('project_config')
 
+            df_st = None
+            if stakeholder_sheet:
+                file.seek(0)
+                df_st = pd.read_excel(file, sheet_name=stakeholder_sheet)
+                df_st.columns = [str(c).strip() for c in df_st.columns]
+
             file.seek(0)
-            df = pd.read_excel(file, sheet_name=schedule_sheet, skiprows=5)
+            df = pd.read_excel(file, sheet_name=schedule_sheet, skiprows=6)
             df.columns = [str(c).strip() for c in df.columns]
 
             sheet1_givers = []
@@ -1208,9 +1222,6 @@ def bulk_upload():
                 return jsonify({"success": False, "message": "Missing 'Day / Section' column in table."}), 400
             
             df['Day / Section'] = df['Day / Section'].ffill()
-            
-            if 'Meeting Link' in df.columns:
-                df['Meeting Link'] = df['Meeting Link'].ffill()
 
             base_dt = datetime.now() + timedelta(days=1)
             current_day = base_dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1237,7 +1248,6 @@ def bulk_upload():
                 receivers = group['Knowledge Receiver'].dropna().astype(str).tolist() if 'Knowledge Receiver' in df.columns else []
                 
                 start_dates = group['Start Date'].dropna().astype(str).tolist() if 'Start Date' in df.columns else []
-                meeting_links = group['Meeting Link'].dropna().astype(str).tolist() if 'Meeting Link' in df.columns else []
                 
                 custom_start_date = None
                 for sd in start_dates:
@@ -1245,11 +1255,6 @@ def bulk_upload():
                         custom_start_date = sd.strip()
                         break
                         
-                custom_meeting_link = None
-                for ml in meeting_links:
-                    if ml.strip() and ml.strip().lower() != 'nan':
-                        custom_meeting_link = ml.strip()
-                        break
 
                 all_givers = set()
                 for g in givers:
@@ -1269,7 +1274,6 @@ def bulk_upload():
                         all_stakeholder_ids.update(stakeholder_ids)
 
                 topics = group['Topic / Sub-topic Name'].dropna().astype(str).tolist() if 'Topic / Sub-topic Name' in df.columns else []
-                description = "\n".join(topics)
                 
                 desired_hour = random.randint(10, 16)
                 desired_minute = random.choice([0, 15, 30, 45])
@@ -1360,7 +1364,60 @@ def bulk_upload():
                     current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-                final_meeting_link = custom_meeting_link if custom_meeting_link else 'https://meet.google.com/bulk-auto-generated'
+                current_time = datetime.strptime(formatted_date, "%Y-%m-%d %H:%M:%S")
+                import json
+                agenda = []
+                for _, row in group.iterrows():
+                    topic_name = str(row['Topic / Sub-topic Name']) if 'Topic / Sub-topic Name' in df.columns else "Unknown Topic"
+                    
+                    duration_mins = 60
+                    if 'Duration (minutes)' in df.columns:
+                        try:
+                            duration_mins = int(float(row['Duration (minutes)']))
+                        except:
+                            pass
+                            
+                    giver = ""
+                    receiver = ""
+                    
+                    if df_st is not None and topic_name in df_st.columns:
+                        # Extract topic-level mapping from Sheet 1
+                        topic_col = df_st[topic_name].astype(str).str.strip().str.lower()
+                        type_col = df_st.get('Type', pd.Series()).astype(str).str.strip().str.lower()
+                        name_col = df_st.get('Name', pd.Series()).astype(str)
+                        
+                        givers_list = df_st[(topic_col == 'yes') & (type_col.isin(['knowledge giver', 'outgoing sme (knowledge giver)']))]['Name'].dropna().astype(str).tolist()
+                        receivers_list = df_st[(topic_col == 'yes') & (type_col.isin(['knowledge receiver', 'incoming team member (knowledge receiver)']))]['Name'].dropna().astype(str).tolist()
+                        
+                        giver = ", ".join([x.strip() for x in givers_list if x.strip() and x.strip().lower() != 'nan'])
+                        receiver = ", ".join([x.strip() for x in receivers_list if x.strip() and x.strip().lower() != 'nan'])
+                    
+                    if not giver and not receiver:
+                        # Fallback to Sheet 2 day-level aggregation
+                        giver = str(row.get('Knowledge Giver', ''))
+                        receiver = str(row.get('Knowledge Receiver', ''))
+                        if giver.lower() == 'nan': giver = ""
+                        if receiver.lower() == 'nan': receiver = ""
+                    
+                    start_time_str = current_time.strftime("%I:%M %p")
+                    end_time = current_time + timedelta(minutes=duration_mins)
+                    end_time_str = end_time.strftime("%I:%M %p")
+                    time_slot = f"{start_time_str} - {end_time_str}"
+                    
+                    agenda.append({
+                        "time_slot": time_slot,
+                        "topic": topic_name,
+                        "duration": duration_mins,
+                        "giver": giver,
+                        "receiver": receiver
+                    })
+                    current_time = end_time
+                    
+                session_end_time = current_time
+                description = json.dumps(agenda)
+
+                final_meeting_link = ""
+                title = f'{project_name} - {plan_name} - {day_str}'
 
                 query = """
                     INSERT INTO meetings (plan_id, title, scheduled_at, description, meeting_link, organizer_id)
@@ -1368,7 +1425,7 @@ def bulk_upload():
                 """
                 params = (
                     plan_id, 
-                    f'{project_name} - {plan_name} - {day_str}', 
+                    title, 
                     formatted_date, 
                     description,
                     final_meeting_link,
@@ -1380,8 +1437,42 @@ def bulk_upload():
                 for sh_id in stakeholder_ids:
                     execute_write("INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)", (meeting_id, sh_id))
 
+                attendee_emails = []
+                if stakeholder_ids:
+                    format_strings = ','.join(['%s'] * len(stakeholder_ids))
+                    sh_res = execute_query(f"SELECT email FROM stakeholders WHERE id IN ({format_strings})", tuple(stakeholder_ids))
+                    attendee_emails = [r['email'] for r in sh_res if r.get('email')]
+                
+                from services.google_calendar_service import GoogleCalendarService
+                if meeting_link_option == "Single Link for All Days" and shared_meet_link:
+                    GoogleCalendarService.create_meeting_event(
+                        meeting_id=meeting_id,
+                        title=title,
+                        description=description,
+                        start_dt=datetime.strptime(formatted_date, "%Y-%m-%d %H:%M:%S"),
+                        end_dt=session_end_time,
+                        meeting_link=shared_meet_link,
+                        attendee_emails=attendee_emails
+                    )
+                    final_meeting_link = shared_meet_link
+                else:
+                    res = GoogleCalendarService.create_meeting_event(
+                        meeting_id=meeting_id,
+                        title=title,
+                        description=description,
+                        start_dt=datetime.strptime(formatted_date, "%Y-%m-%d %H:%M:%S"),
+                        end_dt=session_end_time,
+                        generate_meet_link=True,
+                        attendee_emails=attendee_emails
+                    )
+                    final_meeting_link = res.get('hangout_link') if res else ""
+                    if meeting_link_option == "Single Link for All Days":
+                        shared_meet_link = final_meeting_link
+                
+                execute_write("UPDATE meetings SET meeting_link = %s WHERE id = %s", (final_meeting_link, meeting_id))
+
                 try:
-                    trigger_meeting_notifications(meeting_id)
+                    trigger_meeting_notifications(meeting_id, skip_calendar=True)
                 except Exception as notify_err:
                     print(f"Error triggering notifications for {meeting_id}: {notify_err}")
 
