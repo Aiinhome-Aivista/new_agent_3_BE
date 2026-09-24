@@ -5,11 +5,11 @@ from db import execute_query
 
 logger = logging.getLogger(__name__)
 
-def trigger_meeting_notifications(meeting_id, is_overdue=False):
+def trigger_meeting_notifications(meeting_id, is_overdue=False, skip_calendar=False):
     """
     Triggers meeting notifications in a background thread.
     """
-    thread = threading.Thread(target=_send_meeting_notification_async, args=(meeting_id, is_overdue))
+    thread = threading.Thread(target=_send_meeting_notification_async, args=(meeting_id, is_overdue, skip_calendar))
     thread.daemon = True
     thread.start()
     logger.info(f"Spawned background notification thread for meeting ID: {meeting_id} (is_overdue={is_overdue})")
@@ -20,7 +20,7 @@ def trigger_overdue_notifications(meeting_id):
     """
     trigger_meeting_notifications(meeting_id, is_overdue=True)
 
-def _send_meeting_notification_async(meeting_id, is_overdue=False):
+def _send_meeting_notification_async(meeting_id, is_overdue=False, skip_calendar=False):
     logger.info(f"Notification thread started. Meeting Created: Meeting ID = {meeting_id}")
     try:
         from config import Config
@@ -117,32 +117,102 @@ def _send_meeting_notification_async(meeting_id, is_overdue=False):
             intro_text = "<p>A new Knowledge Transfer (KT) meeting has been scheduled. Please find the details below:</p>"
             action_box = ""
         
-        # Format description and meeting link optional fields
-        description_row = ""
-        if meeting.get('description'):
-            description_row = f"""
-          <tr>
-            <td class="label">Description:</td>
-            <td class="value">{meeting['description']}</td>
-          </tr>
-            """
-
-        link_row = ""
-        if meeting.get('meeting_link'):
-            link_row = f"""
-          <tr>
-            <td class="label">Meeting Link:</td>
-            <td class="value"><a href="{meeting['meeting_link']}" style="color: #3b82f6; text-decoration: underline;">{meeting['meeting_link']}</a></td>
-          </tr>
-            """
-
-        # Generate ICS Content
         import uuid
         from datetime import datetime, timedelta
         
         # Calculate start and end times in the correct format for ICS
         start_ics = scheduled_dt.strftime("%Y%m%dT%H%M%S")
-        end_dt = scheduled_dt + timedelta(hours=2)
+        end_dt = scheduled_dt + timedelta(hours=2) # Default
+        
+        # Format description and meeting link optional fields
+        description_row = ""
+        if meeting.get('description'):
+            import json
+            try:
+                agenda = json.loads(meeting['description'])
+                agenda_html = """
+                <div class="table-responsive">
+                <table class="agenda-table" style="width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 15px; font-size: 13px;">
+                    <thead>
+                        <tr style="background-color: #f3f4f6; color: #374151;">
+                            <th style="padding: 10px; border: 1px solid #d1d5db; text-align: left; width: 22%; word-break: break-word;">Time Slot</th>
+                            <th style="padding: 10px; border: 1px solid #d1d5db; text-align: left; width: 25%; word-break: break-word;">Topic</th>
+                            <th style="padding: 10px; border: 1px solid #d1d5db; text-align: left; width: 13%; word-break: break-word;">Duration</th>
+                            <th style="padding: 10px; border: 1px solid #d1d5db; text-align: left; width: 20%; word-break: break-word;">Giver(s)</th>
+                            <th style="padding: 10px; border: 1px solid #d1d5db; text-align: left; width: 20%; word-break: break-word;">Receiver(s)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                for item in agenda:
+                    agenda_html += f"""
+                        <tr>
+                            <td style="padding: 10px; border: 1px solid #d1d5db; word-break: break-word;">{item.get('time_slot', '')}</td>
+                            <td style="padding: 10px; border: 1px solid #d1d5db;">{item.get('topic', '')}</td>
+                            <td style="padding: 10px; border: 1px solid #d1d5db;">{item.get('duration', '')} mins</td>
+                            <td style="padding: 10px; border: 1px solid #d1d5db;">{item.get('giver', '')}</td>
+                            <td style="padding: 10px; border: 1px solid #d1d5db;">{item.get('receiver', '')}</td>
+                        </tr>
+                    """
+                agenda_html += "</tbody></table></div>"
+                
+                if len(agenda) > 0:
+                    start_time_str = agenda[0].get('time_slot', '').split(' - ')[0]
+                    end_time_str = agenda[-1].get('time_slot', '').split(' - ')[-1]
+                    session_window = f"{start_time_str} - {end_time_str}"
+                    
+                    try:
+                        end_dt_parsed = datetime.strptime(end_time_str, "%I:%M %p")
+                        end_dt = scheduled_dt.replace(hour=end_dt_parsed.hour, minute=end_dt_parsed.minute, second=0, microsecond=0)
+                    except:
+                        pass
+                else:
+                    session_window = "N/A"
+                    
+                if not is_overdue:
+                    subject = f"KT Schedule: {meeting['title']} Agenda & Meeting Details"
+                    
+                description_row = f"""
+              <tr>
+                <td colspan="2">
+                  <div style="font-weight: bold; margin-bottom: 5px; color: #111827; font-size: 15px;">Session Window: {session_window}</div>
+                  {agenda_html}
+                  <div style="margin-top: 15px; font-style: italic; color: #4b5563; font-size: 13px;">
+                    Note: Please join the common Google Meet link at your respective topic time slots.
+                  </div>
+                </td>
+              </tr>
+                """
+            except Exception:
+                # Fallback for non-JSON descriptions
+                description_row = f"""
+          <tr>
+            <td colspan="2" style="padding-top: 15px;">
+              <table style="width: 100%; table-layout: fixed; border-collapse: collapse;">
+                <tr>
+                  <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Description:</td>
+                  <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;"><pre style="font-family: inherit; margin: 0; white-space: pre-wrap; word-break: break-word;">{meeting['description']}</pre></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+                """
+
+        link_row = ""
+        if meeting.get('meeting_link'):
+            link_row = f"""
+          <tr>
+            <td colspan="2">
+              <table style="width: 100%; table-layout: fixed; border-collapse: collapse;">
+                <tr>
+                  <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Meeting Link:</td>
+                  <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;"><a href="{meeting['meeting_link']}" style="color: #3b82f6; text-decoration: underline; font-weight: bold; word-break: break-all;">{meeting['meeting_link']}</a></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+            """
+        
         end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
         now_ics = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         
@@ -173,14 +243,14 @@ END:VCALENDAR"""
         receivers_str = ", ".join([p.get('name', 'Unknown') for p in knowledge_receivers]) or "Not specified"
         givers_row = f"""
           <tr>
-            <td class="label">Knowledge Givers:</td>
-            <td class="value">{givers_str}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Knowledge Givers:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{givers_str}</td>
           </tr>
         """
         receivers_row = f"""
           <tr>
-            <td class="label">Participants:</td>
-            <td class="value">{receivers_str}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Participants:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{receivers_str}</td>
           </tr>
         """
 
@@ -239,10 +309,13 @@ END:VCALENDAR"""
     .label {{
       font-weight: bold;
       color: #475569;
-      width: 130px;
+      width: 35%;
+      max-width: 130px;
     }}
     .value {{
       color: #1e293b;
+      word-break: break-word;
+      overflow-wrap: break-word;
     }}
     .footer {{
       background-color: #f1f5f9;
@@ -251,6 +324,18 @@ END:VCALENDAR"""
       text-align: center;
       font-size: 12px;
       border-top: 1px solid #e2e8f0;
+    }}
+    .table-responsive {{
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      width: 100%;
+    }}
+    @media only screen and (max-width: 600px) {{
+      .container {{ margin: 0; border-radius: 0; border: none; }}
+      .content {{ padding: 15px 10px; }}
+      .meeting-details {{ padding: 15px; }}
+      .label {{ display: block; width: 100%; margin-bottom: 4px; }}
+      .value {{ display: block; width: 100%; margin-bottom: 15px; word-break: break-word; }}
     }}
   </style>
 </head>
@@ -264,28 +349,28 @@ END:VCALENDAR"""
       {intro_text}
       
       <div class="meeting-details">
-        <table>
+        <table style="width: 100%; table-layout: fixed; border-collapse: collapse;">
           <tr>
-            <td class="label">Meeting Title:</td>
-            <td class="value">{meeting['title']}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Meeting Title:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{meeting['title']}</td>
           </tr>
           <tr>
-            <td class="label">Project/Plan:</td>
-            <td class="value">{meeting['application_name']}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Project/Plan:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{meeting['application_name']}</td>
           </tr>
           <tr>
-            <td class="label">Organizer: </td>
-            <td class="value">{organizer_name}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Manager:&nbsp;</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{organizer_name}</td>
           </tr>
           {givers_row}
           {receivers_row}
           <tr>
-            <td class="label">Date:</td>
-            <td class="value">{meeting_date}</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Date:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{meeting_date}</td>
           </tr>
           <tr>
-            <td class="label">Time:</td>
-            <td class="value">{meeting_time} ({timezone})</td>
+            <td class="label" style="width: 35%; word-break: break-word; font-weight: bold; color: #475569; padding: 8px 0; vertical-align: top;">Time:</td>
+            <td class="value" style="word-break: break-word; color: #1e293b; padding: 8px 0; vertical-align: top;">{meeting_time} ({timezone})</td>
           </tr>
           {description_row}
           {link_row}
@@ -309,20 +394,21 @@ END:VCALENDAR"""
                 logger.error(f"Email Failed: Meeting ID = {meeting_id}, Recipient Email = {email}")
                 
         # 6. Trigger Google Calendar event creation
-        try:
-            from services.google_calendar_service import GoogleCalendarService
-            attendee_emails = list(recipients.keys())
-            if attendee_emails:
-                GoogleCalendarService.create_meeting_event(
-                    meeting_id=meeting_id,
-                    title=meeting['title'],
-                    description=meeting.get('description'),
-                    start_dt=scheduled_dt,
-                    meeting_link=meeting.get('meeting_link'),
-                    attendee_emails=attendee_emails
-                )
-        except Exception as cal_err:
-            logger.error(f"Calendar Creation Failed: Meeting ID = {meeting_id}. Error: {cal_err}")
+        if not skip_calendar:
+            try:
+                from services.google_calendar_service import GoogleCalendarService
+                attendee_emails = list(recipients.keys())
+                if attendee_emails:
+                    GoogleCalendarService.create_meeting_event(
+                        meeting_id=meeting_id,
+                        title=meeting['title'],
+                        description=meeting.get('description'),
+                        start_dt=scheduled_dt,
+                        meeting_link=meeting.get('meeting_link'),
+                        attendee_emails=attendee_emails
+                    )
+            except Exception as cal_err:
+                logger.error(f"Calendar Creation Failed: Meeting ID = {meeting_id}. Error: {cal_err}")
             
     except Exception as e:
         logger.error(f"Notification Service error for meeting {meeting_id}: {e}")

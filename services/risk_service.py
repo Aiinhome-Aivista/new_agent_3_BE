@@ -75,7 +75,6 @@ def detect_risks_service(plan_id):
             proj_config_query = "SELECT p.config FROM kt_projects p JOIN kt_plans pl ON pl.project_id = p.id WHERE pl.id = %s"
             proj_config_data = execute_query(proj_config_query, (plan_id,))
             if proj_config_data and proj_config_data[0]['config']:
-                import json
                 config_json = json.loads(proj_config_data[0]['config'])
                 app_name = plan_data[0]['application_name'] if plan_data else ''
                 track = next((t for t in config_json.get('tracks', []) if str(t.get('name', '')).strip() == str(app_name).strip()), None)
