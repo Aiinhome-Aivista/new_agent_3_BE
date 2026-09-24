@@ -59,15 +59,27 @@ class GoogleCalendarService:
         return build('calendar', 'v3', credentials=creds)
 
     @staticmethod
-    def create_meeting_event(meeting_id, title, description, start_dt, meeting_link, attendee_emails, timezone="Asia/Kolkata"):
+    def create_meeting_event(meeting_id, title, description, start_dt, meeting_link=None, attendee_emails=[], timezone="Asia/Kolkata", generate_meet_link=False, end_dt=None):
         """
         Creates a Google Calendar event for the meeting and invites the attendees.
         """
         try:
             service = GoogleCalendarService.get_service()
             
-            # End time default duration is 1 hour
-            end_dt = start_dt + datetime.timedelta(hours=1)
+            if not end_dt:
+                end_dt = start_dt + datetime.timedelta(hours=1)
+                
+            # Attempt to parse description as JSON agenda
+            import json
+            try:
+                agenda = json.loads(description)
+                desc_text = "KT Agenda:\n\n"
+                for item in agenda:
+                    desc_text += f"[{item.get('time_slot')}] {item.get('topic')} ({item.get('duration')} mins)\n"
+                    desc_text += f"Giver(s): {item.get('giver')} | Receiver(s): {item.get('receiver')}\n\n"
+                description = desc_text
+            except Exception:
+                pass # Not JSON, use as-is
             
             # Format datetime strings
             start_str = start_dt.isoformat()
@@ -96,25 +108,46 @@ class GoogleCalendarService:
                 }
             }
             
-            # Insert Event
-            logger.info(f"Creating Google Calendar event for Meeting ID = {meeting_id}...")
-            event = service.events().insert(
-                calendarId='primary',
-                body=event_body,
-                sendUpdates='all'
-            ).execute()
+            if generate_meet_link:
+                import uuid
+                event_body['conferenceData'] = {
+                    'createRequest': {
+                        'requestId': f"meet-{meeting_id}-{uuid.uuid4().hex[:8]}",
+                        'conferenceSolutionKey': {
+                            'type': 'hangoutsMeet'
+                        }
+                    }
+                }
+                logger.info(f"Creating Google Calendar event for Meeting ID = {meeting_id} with Meet link generation...")
+                event = service.events().insert(
+                    calendarId='primary',
+                    body=event_body,
+                    conferenceDataVersion=1,
+                    sendUpdates='all'
+                ).execute()
+            else:
+                logger.info(f"Creating Google Calendar event for Meeting ID = {meeting_id}...")
+                event = service.events().insert(
+                    calendarId='primary',
+                    body=event_body,
+                    sendUpdates='all'
+                ).execute()
             
             event_id = event.get('id')
             html_link = event.get('htmlLink')
+            hangout_link = event.get('hangoutLink')
             
             logger.info(f"Calendar Event Created: Meeting ID = {meeting_id}")
             logger.info(f"Calendar Event ID: {event_id}")
             logger.info(f"Event Link: {html_link}")
+            if hangout_link:
+                logger.info(f"Generated Meet Link: {hangout_link}")
             logger.info(f"Invited Participant Emails: {list(attendee_emails)}")
             
             return {
                 "event_id": event_id,
-                "event_link": html_link
+                "event_link": html_link,
+                "hangout_link": hangout_link
             }
             
         except Exception as e:
