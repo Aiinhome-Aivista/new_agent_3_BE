@@ -16,26 +16,46 @@ class GoogleCalendarService:
         if not Config.GOOGLE_CLIENT_ID or not Config.GOOGLE_CLIENT_SECRET:
             raise Exception("Google client configuration (GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET) is missing in environment.")
             
-        token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'token.json')
-        if not os.path.exists(token_path):
-            raise Exception("Google Calendar is not connected. Please authenticate using /auth/google/login.")
-            
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-            
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    logger.info("Token expired. Refreshing automatically...")
+        creds = None
+        
+        # 1. First prioritize GOOGLE_REFRESH_TOKEN from .env
+        if Config.GOOGLE_REFRESH_TOKEN:
+            try:
+                creds = Credentials(
+                    token=None,
+                    refresh_token=Config.GOOGLE_REFRESH_TOKEN,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=Config.GOOGLE_CLIENT_ID,
+                    client_secret=Config.GOOGLE_CLIENT_SECRET,
+                    scopes=SCOPES
+                )
+                if not creds.valid:
+                    logger.info("Refreshing credentials using GOOGLE_REFRESH_TOKEN from .env...")
                     creds.refresh(Request())
-                    # Write the refreshed credentials back to token.json
-                    with open(token_path, 'w') as token_file:
-                        token_file.write(creds.to_json())
-                    logger.info("Token Refreshed")
-                except Exception as refresh_err:
-                    raise Exception(f"Google Calendar token refresh failed: {refresh_err}. Please authenticate using /auth/google/login.")
-            else:
-                raise Exception("Google Calendar is not connected. Please authenticate using /auth/google/login.")
-                
+            except Exception as env_err:
+                logger.warning(f"Failed to refresh using GOOGLE_REFRESH_TOKEN from .env: {env_err}")
+                creds = None
+
+        # 2. Fallback to token.json if .env token is missing or failed
+        if not creds or not creds.valid:
+            token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'token.json')
+            if os.path.exists(token_path):
+                try:
+                    creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+                    if not creds or not creds.valid:
+                        if creds and creds.expired and creds.refresh_token:
+                            logger.info("Token expired in token.json. Refreshing automatically...")
+                            creds.refresh(Request())
+                            with open(token_path, 'w') as token_file:
+                                token_file.write(creds.to_json())
+                            logger.info("Token Refreshed and written to token.json")
+                except Exception as file_err:
+                    logger.warning(f"Failed to load/refresh credentials from token.json: {file_err}")
+                    creds = None
+
+        if not creds or not creds.valid:
+            raise Exception("Google Calendar is not connected. Please authenticate using /auth/google/login or configure GOOGLE_REFRESH_TOKEN in .env.")
+            
         return build('calendar', 'v3', credentials=creds)
 
     @staticmethod
