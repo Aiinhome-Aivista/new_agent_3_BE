@@ -94,6 +94,8 @@ def callback():
             token_file.write(creds.to_json())
             
         logger.info("token.json Created")
+        if creds.refresh_token:
+            logger.info(f"Google Refresh Token: {creds.refresh_token}")
         logger.info("OAuth Success")
         
         # Clean up session keys
