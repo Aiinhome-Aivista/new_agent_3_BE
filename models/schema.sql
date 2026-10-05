@@ -161,3 +161,22 @@ CREATE TABLE IF NOT EXISTS holidays (
     holiday_year INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS kt_projects (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    reason_for_kt VARCHAR(255) NULL,
+    scopes TEXT NULL,
+    expected_sessions INT NULL,
+    start_date DATE NULL,
+    end_date DATE NULL,
+    session_frequency VARCHAR(50) NULL,
+    platform VARCHAR(50) NULL,
+    tech_stack TEXT NULL,
+    config JSON NOT NULL,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+

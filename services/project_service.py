@@ -8,10 +8,29 @@ def create_project(data, user_id):
     try:
         cursor = conn.cursor()
         name = data.get("name")
+        description = data.get("description")
+        reason_for_kt = data.get("reasonForKt") or data.get("reason_for_kt") or data.get("kt_reason")
+        scopes = data.get("scopes")
+        expected_sessions = data.get("expectedSessions") or data.get("expected_sessions") or None
+        start_date = data.get("startDate") or data.get("start_date") or None
+        end_date = data.get("endDate") or data.get("end_date") or None
+        session_frequency = data.get("frequency") or data.get("session_frequency") or None
+        platform = data.get("platform")
+        tech_stack = data.get("techStack") or data.get("tech_stack") or None
         config = json.dumps(data)
         
-        sql = "INSERT INTO kt_projects (name, config, created_by) VALUES (%s, %s, %s)"
-        cursor.execute(sql, (name, config, user_id))
+        sql = """
+            INSERT INTO kt_projects (
+                name, description, reason_for_kt, scopes, expected_sessions,
+                start_date, end_date, session_frequency, platform, tech_stack,
+                config, created_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(sql, (
+            name, description, reason_for_kt, scopes, expected_sessions,
+            start_date, end_date, session_frequency, platform, tech_stack,
+            config, user_id
+        ))
         project_id = cursor.lastrowid
         conn.commit()
         return {"success": True, "data": {"id": project_id}}
@@ -63,10 +82,38 @@ def update_project(project_id, data):
         return {"success": False, "message": "Database connection failed"}
     try:
         cursor = conn.cursor(dictionary=True)
+        name = data.get("name")
+        description = data.get("description")
+        reason_for_kt = data.get("reasonForKt") or data.get("reason_for_kt") or data.get("kt_reason")
+        scopes = data.get("scopes")
+        expected_sessions = data.get("expectedSessions") or data.get("expected_sessions") or None
+        start_date = data.get("startDate") or data.get("start_date") or None
+        end_date = data.get("endDate") or data.get("end_date") or None
+        session_frequency = data.get("frequency") or data.get("session_frequency") or None
+        platform = data.get("platform")
+        tech_stack = data.get("techStack") or data.get("tech_stack") or None
         config = json.dumps(data)
         
-        sql = "UPDATE kt_projects SET config = %s WHERE id = %s"
-        cursor.execute(sql, (config, project_id))
+        sql = """
+            UPDATE kt_projects SET 
+                name = COALESCE(%s, name),
+                description = %s,
+                reason_for_kt = %s,
+                scopes = %s,
+                expected_sessions = %s,
+                start_date = %s,
+                end_date = %s,
+                session_frequency = %s,
+                platform = %s,
+                tech_stack = %s,
+                config = %s
+            WHERE id = %s
+        """
+        cursor.execute(sql, (
+            name, description, reason_for_kt, scopes, expected_sessions,
+            start_date, end_date, session_frequency, platform, tech_stack,
+            config, project_id
+        ))
         
         # Also update all kt_plans associated with this project
         cursor.execute("SELECT id, project_config FROM kt_plans WHERE project_id = %s", (project_id,))
@@ -112,7 +159,9 @@ def get_projects():
         cursor = conn.cursor(dictionary=True)
         # Fetch projects with count of plans
         sql = """
-            SELECT p.id, p.name, p.config, p.created_by, p.created_at,
+            SELECT p.id, p.name, p.description, p.reason_for_kt, p.scopes, p.expected_sessions,
+                   p.start_date, p.end_date, p.session_frequency, p.platform, p.tech_stack,
+                   p.config, p.created_by, p.created_at,
                    (SELECT COUNT(*) FROM kt_plans pl WHERE pl.project_id = p.id) as plan_count
             FROM kt_projects p
             ORDER BY p.created_at DESC
@@ -120,8 +169,14 @@ def get_projects():
         cursor.execute(sql)
         projects = cursor.fetchall()
         
-        # Parse JSON config safely
+        # Format dates & parse JSON config safely
         for proj in projects:
+            if proj.get('start_date'):
+                proj['start_date'] = str(proj['start_date'])
+            if proj.get('end_date'):
+                proj['end_date'] = str(proj['end_date'])
+            if proj.get('created_at'):
+                proj['created_at'] = str(proj['created_at'])
             if proj.get('config'):
                 if isinstance(proj['config'], str):
                     try:
@@ -151,6 +206,13 @@ def get_project_by_id(project_id):
         if not project:
             return {"success": False, "message": "Project not found"}
             
+        if project.get('start_date'):
+            project['start_date'] = str(project['start_date'])
+        if project.get('end_date'):
+            project['end_date'] = str(project['end_date'])
+        if project.get('created_at'):
+            project['created_at'] = str(project['created_at'])
+            
         if project.get('config'):
             if isinstance(project['config'], str):
                 try:
@@ -162,6 +224,8 @@ def get_project_by_id(project_id):
         cursor.execute("SELECT * FROM kt_plans WHERE project_id = %s ORDER BY created_at DESC", (project_id,))
         plans = cursor.fetchall()
         for p in plans:
+            if p.get('created_at'):
+                p['created_at'] = str(p['created_at'])
             if p.get('project_config') and isinstance(p['project_config'], str):
                 try:
                     p['project_config'] = json.loads(p['project_config'])
