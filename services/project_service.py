@@ -10,25 +10,23 @@ def create_project(data, user_id):
         name = data.get("name")
         description = data.get("description")
         reason_for_kt = data.get("reasonForKt") or data.get("reason_for_kt") or data.get("kt_reason")
-        scopes = data.get("scopes")
         expected_sessions = data.get("expectedSessions") or data.get("expected_sessions") or None
         start_date = data.get("startDate") or data.get("start_date") or None
         end_date = data.get("endDate") or data.get("end_date") or None
-        session_frequency = data.get("frequency") or data.get("session_frequency") or None
         platform = data.get("platform")
         tech_stack = data.get("techStack") or data.get("tech_stack") or None
         config = json.dumps(data)
         
         sql = """
             INSERT INTO kt_projects (
-                name, description, reason_for_kt, scopes, expected_sessions,
-                start_date, end_date, session_frequency, platform, tech_stack,
+                name, description, reason_for_kt, expected_sessions,
+                start_date, end_date, platform, tech_stack,
                 config, created_by
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         cursor.execute(sql, (
-            name, description, reason_for_kt, scopes, expected_sessions,
-            start_date, end_date, session_frequency, platform, tech_stack,
+            name, description, reason_for_kt, expected_sessions,
+            start_date, end_date, platform, tech_stack,
             config, user_id
         ))
         project_id = cursor.lastrowid
@@ -85,11 +83,9 @@ def update_project(project_id, data):
         name = data.get("name")
         description = data.get("description")
         reason_for_kt = data.get("reasonForKt") or data.get("reason_for_kt") or data.get("kt_reason")
-        scopes = data.get("scopes")
         expected_sessions = data.get("expectedSessions") or data.get("expected_sessions") or None
         start_date = data.get("startDate") or data.get("start_date") or None
         end_date = data.get("endDate") or data.get("end_date") or None
-        session_frequency = data.get("frequency") or data.get("session_frequency") or None
         platform = data.get("platform")
         tech_stack = data.get("techStack") or data.get("tech_stack") or None
         config = json.dumps(data)
@@ -99,19 +95,17 @@ def update_project(project_id, data):
                 name = COALESCE(%s, name),
                 description = %s,
                 reason_for_kt = %s,
-                scopes = %s,
                 expected_sessions = %s,
                 start_date = %s,
                 end_date = %s,
-                session_frequency = %s,
                 platform = %s,
                 tech_stack = %s,
                 config = %s
             WHERE id = %s
         """
         cursor.execute(sql, (
-            name, description, reason_for_kt, scopes, expected_sessions,
-            start_date, end_date, session_frequency, platform, tech_stack,
+            name, description, reason_for_kt, expected_sessions,
+            start_date, end_date, platform, tech_stack,
             config, project_id
         ))
         
@@ -159,8 +153,8 @@ def get_projects():
         cursor = conn.cursor(dictionary=True)
         # Fetch projects with count of plans
         sql = """
-            SELECT p.id, p.name, p.description, p.reason_for_kt, p.scopes, p.expected_sessions,
-                   p.start_date, p.end_date, p.session_frequency, p.platform, p.tech_stack,
+            SELECT p.id, p.name, p.description, p.reason_for_kt, p.expected_sessions,
+                   p.start_date, p.end_date, p.platform, p.tech_stack,
                    p.config, p.created_by, p.created_at,
                    (SELECT COUNT(*) FROM kt_plans pl WHERE pl.project_id = p.id) as plan_count
             FROM kt_projects p

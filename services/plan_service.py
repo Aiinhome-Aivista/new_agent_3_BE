@@ -30,13 +30,105 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
     )
     return new_id
 
+def get_session_allocation_text(project_config):
+    if not project_config:
+        return ""
+    
+    expected_sessions = project_config.get('expectedSessions')
+    if not expected_sessions:
+        return ""
+        
+    try:
+        expected_sessions = int(expected_sessions)
+    except ValueError:
+        return ""
+        
+    _meta = project_config.get('_meta', {})
+    track_id = _meta.get('trackId')
+    module_id = _meta.get('moduleId')
+    
+    options = {}
+    if track_id:
+        tracks = project_config.get('tracks', [])
+        for t in tracks:
+            if t.get('id') == track_id:
+                if module_id:
+                    for m in t.get('modules', []):
+                        if m.get('id') == module_id:
+                            options = m.get('options', {})
+                            break
+                else:
+                    options = t.get('options', {})
+                break
+                
+    if not options:
+        return ""
+        
+    has_ka = bool(options.get('ka'))
+    has_rkt = bool(options.get('reverse_kt'))
+    has_ss = bool(options.get('shadow_resourcing'))
+    has_ls = bool(options.get('lead_resourcing'))
+    
+    selected_phases = []
+    if has_ka: selected_phases.append("Knowledge Acquisition")
+    if has_rkt: selected_phases.append("Reverse KT")
+    if has_ss: selected_phases.append("Shadow Support")
+    if has_ls: selected_phases.append("Lead Support")
+    
+    num_phases = len(selected_phases)
+    if num_phases == 0:
+        return ""
+        
+    allocations = {}
+    if has_ka:
+        if num_phases == 4:
+            ka_ratio = 0.70
+        elif num_phases == 3:
+            ka_ratio = 0.80
+        elif num_phases == 2:
+            ka_ratio = 0.90
+        else:
+            ka_ratio = 1.0
+            
+        allocations["Knowledge Acquisition"] = int(round(expected_sessions * ka_ratio))
+        
+        others_count = num_phases - 1
+        if others_count > 0:
+            remaining_sessions = expected_sessions - allocations["Knowledge Acquisition"]
+            other_phases = [p for p in selected_phases if p != "Knowledge Acquisition"]
+            for i, p in enumerate(other_phases):
+                share = remaining_sessions // others_count
+                if i < remaining_sessions % others_count:
+                    share += 1
+                allocations[p] = share
+    else:
+        for i, p in enumerate(selected_phases):
+            share = expected_sessions // num_phases
+            if i < expected_sessions % num_phases:
+                share += 1
+            allocations[p] = share
+            
+    start_date = project_config.get('startDate') or project_config.get('start_date') or 'Not Specified'
+    end_date = project_config.get('endDate') or project_config.get('end_date') or 'Not Specified'
+            
+    dist_text = f"\n    [CRITICAL INSTRUCTION: Session Allocation & Timeline]\n"
+    dist_text += f"    Total Expected Sessions: {expected_sessions}\n"
+    dist_text += f"    Project Start Date: {start_date}\n"
+    dist_text += f"    Project End Date: {end_date}\n"
+    dist_text += f"    You MUST strictly distribute these {expected_sessions} sessions across the selected phases as follows:\n"
+    for p in selected_phases:
+        dist_text += f"    - {p}: Exactly {allocations[p]} sessions\n"
+        
+    return dist_text
+
 def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None, project_config=None, project_id=None):
     created_by = None
     if user_email and user_full_name and user_role:
         created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
 
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
-    project_config_text = f"\n    Project Configuration Details:\n{json.dumps(project_config, indent=2)}" if project_config else ""
+    session_allocation_instruction = get_session_allocation_text(project_config)
+    project_config_text = f"\n    Project Configuration Details:\n{json.dumps(project_config, indent=2)}\n{session_allocation_instruction}" if project_config else ""
     
     prompt = load_prompt(
         "plan_generation.txt",
