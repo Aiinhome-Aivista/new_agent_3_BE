@@ -33,33 +33,38 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
 def get_session_allocation_text(project_config):
     if not project_config:
         return ""
-    
-    expected_sessions = project_config.get('expectedSessions')
-    if not expected_sessions:
-        return ""
-        
-    try:
-        expected_sessions = int(expected_sessions)
-    except ValueError:
-        return ""
         
     _meta = project_config.get('_meta', {})
     track_id = _meta.get('trackId')
     module_id = _meta.get('moduleId')
     
     options = {}
+    durations = {}
+    inputs = {}
+    tracks = project_config.get('tracks', [])
     if track_id:
-        tracks = project_config.get('tracks', [])
         for t in tracks:
             if t.get('id') == track_id:
                 if module_id:
                     for m in t.get('modules', []):
                         if m.get('id') == module_id:
                             options = m.get('options', {})
+                            durations = m.get('durations', {})
+                            inputs = m.get('inputs', {})
                             break
                 else:
                     options = t.get('options', {})
+                    durations = t.get('durations', {})
+                    inputs = t.get('inputs', {})
                 break
+    elif tracks:
+        options = tracks[0].get('options', {})
+        durations = tracks[0].get('durations', {})
+        inputs = tracks[0].get('inputs', {})
+    else:
+        options = project_config.get('phaseSelected', {})
+        durations = project_config.get('phaseDurations', {})
+        inputs = project_config.get('inputs', {})
                 
     if not options:
         return ""
@@ -78,46 +83,146 @@ def get_session_allocation_text(project_config):
     num_phases = len(selected_phases)
     if num_phases == 0:
         return ""
-        
+
+    phase_keys = {
+        "Knowledge Acquisition": "ka",
+        "Reverse KT": "reverse_kt",
+        "Shadow Support": "shadow_resourcing",
+        "Lead Support": "lead_resourcing"
+    }
+
+    # Extract total duration from durations dictionary
+    total_dur_days = 0
+    if durations:
+        for k in ['ka', 'reverse_kt', 'shadow_resourcing', 'lead_resourcing']:
+            val = durations.get(k)
+            if val is not None and str(val).isdigit():
+                total_dur_days += int(val)
+
+    expected_sessions = project_config.get('expectedSessions')
+    if expected_sessions:
+        try:
+            expected_sessions = int(expected_sessions)
+        except ValueError:
+            expected_sessions = total_dur_days
+    else:
+        expected_sessions = total_dur_days
+
     allocations = {}
-    if has_ka:
-        if num_phases == 4:
-            ka_ratio = 0.70
-        elif num_phases == 3:
-            ka_ratio = 0.80
-        elif num_phases == 2:
-            ka_ratio = 0.90
-        else:
-            ka_ratio = 1.0
+    can_use_direct_durations = durations and all(
+        durations.get(phase_keys[p]) is not None and str(durations.get(phase_keys[p])).isdigit()
+        for p in selected_phases
+    )
+
+    if can_use_direct_durations:
+        for p in selected_phases:
+            allocations[p] = int(durations[phase_keys[p]])
+        if expected_sessions == 0:
+            expected_sessions = sum(allocations.values())
+    elif expected_sessions > 0:
+        if has_ka:
+            if num_phases == 1:
+                ka_ratio = 1.0
+            else:
+                # 4 phases -> 70:10:10:10, 3 phases -> 70:15:15, 2 phases -> 70:30
+                ka_ratio = 0.70
+                
+            allocations["Knowledge Acquisition"] = int(round(expected_sessions * ka_ratio))
             
-        allocations["Knowledge Acquisition"] = int(round(expected_sessions * ka_ratio))
-        
-        others_count = num_phases - 1
-        if others_count > 0:
-            remaining_sessions = expected_sessions - allocations["Knowledge Acquisition"]
-            other_phases = [p for p in selected_phases if p != "Knowledge Acquisition"]
-            for i, p in enumerate(other_phases):
-                share = remaining_sessions // others_count
-                if i < remaining_sessions % others_count:
+            others_count = num_phases - 1
+            if others_count > 0:
+                remaining_sessions = expected_sessions - allocations["Knowledge Acquisition"]
+                other_phases = [p for p in selected_phases if p != "Knowledge Acquisition"]
+                for i, p in enumerate(other_phases):
+                    share = remaining_sessions // others_count
+                    if i < remaining_sessions % others_count:
+                        share += 1
+                    allocations[p] = share
+        else:
+            for i, p in enumerate(selected_phases):
+                share = expected_sessions // num_phases
+                if i < expected_sessions % num_phases:
                     share += 1
                 allocations[p] = share
     else:
-        for i, p in enumerate(selected_phases):
-            share = expected_sessions // num_phases
-            if i < expected_sessions % num_phases:
-                share += 1
-            allocations[p] = share
+        for p in selected_phases:
+            allocations[p] = 1
+        expected_sessions = len(selected_phases)
             
     start_date = project_config.get('startDate') or project_config.get('start_date') or 'Not Specified'
     end_date = project_config.get('endDate') or project_config.get('end_date') or 'Not Specified'
+
+    phase_criteria = {
+        "Knowledge Acquisition": {
+            "entry": [
+                ("kt_doc", "KT Plan Ready"),
+                ("stakeholder_map", "Stakeholder Mapping Ready")
+            ],
+            "exit": [
+                ("project_kt_doc_ready", "Project KT Document Ready"),
+                ("sud_mandatory", "SUD Mandatory")
+            ]
+        },
+        "Reverse KT": {
+            "entry": [
+                ("ka_completed", "Knowledge Acquisition Completed"),
+                ("rkt_project_kt_doc", "Project KT Document Ready")
+            ],
+            "exit": [
+                ("rkt_assessment", "Assessment Passed (≥80%)")
+            ]
+        },
+        "Shadow Support": {
+            "entry": [
+                ("assessment_80", "Assessment (80% Above)"),
+                ("sud_doc_upload", "SUD Document Uploaded or Not")
+            ],
+            "exit": [
+                ("ticket_resolving", "Need to be involved in ticket resolving")
+            ]
+        },
+        "Lead Support": {
+            "entry": [
+                ("lr_ticket_resolving", "Need to be involved in ticket resolving")
+            ],
+            "exit": []
+        }
+    }
             
-    dist_text = f"\n    [CRITICAL INSTRUCTION: Session Allocation & Timeline]\n"
-    dist_text += f"    Total Expected Sessions: {expected_sessions}\n"
-    dist_text += f"    Project Start Date: {start_date}\n"
-    dist_text += f"    Project End Date: {end_date}\n"
-    dist_text += f"    You MUST strictly distribute these {expected_sessions} sessions across the selected phases as follows:\n"
+    dist_text = f"\n    [CRITICAL INSTRUCTION: Track Configuration, Durations & Phase Criteria]\n"
+    dist_text += f"    Total Duration: {expected_sessions} days\n"
+    dist_text += f"    Planned KT Start Date: {start_date}\n"
+    dist_text += f"    Planned KT End Date: {end_date}\n"
+    dist_text += f"    You MUST strictly adhere to the following phase durations and document all configured criteria in each phase:\n"
     for p in selected_phases:
-        dist_text += f"    - {p}: Exactly {allocations[p]} sessions\n"
+        p_key = phase_keys[p]
+        dur_val = durations.get(p_key) if (durations and durations.get(p_key) is not None) else allocations.get(p)
+        days_str = f" ({dur_val} days)" if dur_val is not None else ""
+        dist_text += f"    - {p}{days_str}:\n"
+        
+        cfg = phase_criteria.get(p, {})
+        entry_list = []
+        for cid, clabel in cfg.get("entry", []):
+            if options.get(cid):
+                inp = inputs.get(cid)
+                if inp:
+                    entry_list.append(f"{clabel} (Target: {inp})")
+                else:
+                    entry_list.append(clabel)
+                    
+        exit_list = []
+        for cid, clabel in cfg.get("exit", []):
+            if options.get(cid):
+                inp = inputs.get(cid)
+                if inp:
+                    exit_list.append(f"{clabel} (Target: {inp})")
+                else:
+                    exit_list.append(clabel)
+                    
+        if entry_list:
+            dist_text += f"      * Entry Criteria: {', '.join(entry_list)}\n"
+        if exit_list:
+            dist_text += f"      * Exit Criteria: {', '.join(exit_list)}\n"
         
     return dist_text
 
@@ -126,14 +231,29 @@ def generate_plan_service(application_name, scope_description, plan_type, user_e
     if user_email and user_full_name and user_role:
         created_by = resolve_stakeholder_for_user(user_email, user_full_name, user_role)
 
+    tech_stack = ""
+    if project_config:
+        tech_stack = project_config.get('techStack') or project_config.get('tech_stack') or ""
+    if not tech_stack:
+        tech_stack = "Relevant technologies as specified in track scopes"
+
     focus_text = f"\n    Reverse KT Focus Area: {reverse_kt_focus}" if reverse_kt_focus and plan_type == 'Reverse-KT' else ""
     session_allocation_instruction = get_session_allocation_text(project_config)
     project_config_text = f"\n    Project Configuration Details:\n{json.dumps(project_config, indent=2)}\n{session_allocation_instruction}" if project_config else ""
     
+    start_date = "Not Specified"
+    end_date = "Not Specified"
+    if project_config:
+        start_date = project_config.get('startDate') or project_config.get('start_date') or 'Not Specified'
+        end_date = project_config.get('endDate') or project_config.get('end_date') or 'Not Specified'
+
     prompt = load_prompt(
         "plan_generation.txt",
         plan_type=plan_type,
         application_name=application_name,
+        tech_stack=tech_stack,
+        start_date=start_date,
+        end_date=end_date,
         scope_description=scope_description,
         focus_text=focus_text,
         project_config_text=project_config_text

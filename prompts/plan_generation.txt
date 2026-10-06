@@ -1,9 +1,14 @@
-You are an expert IT Project Manager. Create a detailed {plan_type} plan for the application '{application_name}'.
+You are an expert IT Project Manager. Create a detailed {plan_type} plan for the application/track '{application_name}'.
+Tech Stack: {tech_stack}
+Planned KT Timeline: {start_date} to {end_date} (Planned KT Start Date: {start_date}, Planned KT End Date: {end_date})
 Scope & Topics: {scope_description}{focus_text}
 {project_config_text}
 
 CONFIGURATION INTERPRETATION RULES:
-Based on the Project Configuration Details above, you MUST incorporate the following phases into your plan if they are present in the configuration:
+Based on the Project Configuration Details above, you MUST incorporate the following phases and configurations into your plan:
+
+0. Tech Stack Integration:
+    - You MUST directly integrate the technologies specified in Tech Stack ({tech_stack}) throughout the Knowledge Acquisition daily topics, exercises, and architecture.
 
 1. Knowledge Acquisition (KA) Phase:
     - This phase consists ONLY of technical knowledge transfer sessions, module walk-throughs, and architecture for the provided Scope & Topics.
@@ -91,7 +96,8 @@ You MUST execute the following continuous timeline calculation for every day:
 Format the output as a clean, structured Markdown document including:
 1. Objectives
 2. Target Audience
-3. Sessions / Topics Breakdown (MUST follow the 120-minute daily algorithm above for KA Phase, followed by Post-KA Phase headers)
-4. Expected Outcomes
+3. Timeline & Schedule Overview (Explicitly state Planned KT Start Date: {start_date}, Planned KT End Date: {end_date}, Total Duration, and Phase Milestones)
+4. Sessions / Topics Breakdown (MUST follow the 120-minute daily algorithm above for KA Phase, followed by Post-KA Phase headers)
+5. Expected Outcomes
     
 Only output the markdown content, no conversational filler.
