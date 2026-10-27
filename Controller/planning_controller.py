@@ -1,9 +1,91 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from db import execute_query, execute_write
 from llm_service import call_llm
 import json
+import re
 
 planning_bp = Blueprint('planning_bp', __name__)
+
+@planning_bp.route('/generate-tentative', methods=['POST'])
+def generate_tentative_plan():
+    data = request.json or {}
+    required_fields = ['application_name', 'scope_description', 'plan_type']
+    from guardrails import input_rail
+    passed, reason = input_rail(data, required_fields, "/api/plans/generate-tentative")
+    if not passed:
+        return jsonify({"success": False, "message": reason}), 400
+        
+    app_name = data['application_name']
+    scope = data['scope_description']
+    plan_type = data['plan_type']
+    reverse_kt_focus = data.get('reverse_kt_focus')
+    project_config = data.get('project_config')
+    
+    user_email = None
+    user_full_name = None
+    user_role = None
+    
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            import jwt
+            from config import Config
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
+            user_email = payload.get('email')
+            user_role = payload.get('role')
+            user_id = payload.get('sub')
+            if user_id:
+                users = execute_query("SELECT full_name FROM users WHERE id = %s", (user_id,))
+                if users:
+                    user_full_name = users[0]['full_name']
+        except Exception:
+            pass
+
+    try:
+        from services.plan_service import generate_tentative_plan_service
+        result_data = generate_tentative_plan_service(
+            application_name=app_name,
+            scope_description=scope,
+            plan_type=plan_type,
+            user_email=user_email,
+            user_full_name=user_full_name,
+            user_role=user_role,
+            reverse_kt_focus=reverse_kt_focus,
+            project_config=project_config
+        )
+        return jsonify({
+            "success": True, 
+            "data": result_data,
+            "message": "Tentative plan generated successfully"
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@planning_bp.route('/download-tentative-doc', methods=['POST'])
+def download_tentative_doc():
+    data = request.json or {}
+    content = data.get("content", "")
+    application_name = data.get("application_name", "Application")
+    plan_type = data.get("plan_type", "KT")
+    
+    if not content:
+        return jsonify({"success": False, "message": "Plan content is required for download"}), 400
+
+    try:
+        from services.plan_service import convert_markdown_to_docx
+        bio = convert_markdown_to_docx(content, application_name=application_name, plan_type=plan_type)
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', application_name).strip('_') or 'Plan'
+        filename = f"Tentative_{plan_type}_Plan_{safe_name}.docx"
+        
+        return send_file(
+            bio,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @planning_bp.route('/generate', methods=['POST'])
 def generate_plan():
@@ -18,6 +100,7 @@ def generate_plan():
     scope = data['scope_description']
     plan_type = data['plan_type']
     reverse_kt_focus = data.get('reverse_kt_focus') # Optional
+    plan_content = data.get('plan_content')
     
     # Extract user identity from JWT if present
     user_email = None
@@ -45,7 +128,18 @@ def generate_plan():
     project_id = data.get('project_id')
     try:
         from services.plan_service import generate_plan_service
-        result_data = generate_plan_service(app_name, scope, plan_type, user_email, user_full_name, user_role, reverse_kt_focus, project_config, project_id)
+        result_data = generate_plan_service(
+            application_name=app_name, 
+            scope_description=scope, 
+            plan_type=plan_type, 
+            user_email=user_email, 
+            user_full_name=user_full_name, 
+            user_role=user_role, 
+            reverse_kt_focus=reverse_kt_focus, 
+            project_config=project_config, 
+            project_id=project_id,
+            plan_content=plan_content
+        )
         
         return jsonify({
             "success": True, 

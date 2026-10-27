@@ -102,10 +102,14 @@ def detect_risks_service(plan_id):
                         assess_req_query = "SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_final_assessment = 1"
                         assess_req_sh = execute_query(assess_req_query, (plan_id,))
                         
-                        plan_meta = execute_query("SELECT unlocked_on, final_deadline_extension_days FROM kt_plans WHERE id = %s", (plan_id,))
+                        plan_meta = execute_query("SELECT unlocked_on, final_deadline_extension_days, project_config FROM kt_plans WHERE id = %s", (plan_id,))
                         if plan_meta:
                             unlocked_on = plan_meta[0]['unlocked_on']
-                            ext_days = plan_meta[0]['final_deadline_extension_days'] or 90
+                            ext_days = plan_meta[0]['final_deadline_extension_days']
+                            if not ext_days or ext_days == 90:
+                                from services.plan_service import get_reverse_kt_days_from_config
+                                rkt_days = get_reverse_kt_days_from_config(plan_meta[0].get('project_config'))
+                                ext_days = rkt_days if (rkt_days and rkt_days > 0) else (ext_days or 90)
                             
                             from datetime import datetime, timedelta
                             deadline_missed = False

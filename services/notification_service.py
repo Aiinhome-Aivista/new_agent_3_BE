@@ -743,7 +743,7 @@ def _send_final_assessment_reminder_async(plan_id):
         from datetime import datetime
 
         # 1. Fetch plan info
-        plan_query = "SELECT id, application_name, is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
+        plan_query = "SELECT id, application_name, is_final_unlocked, final_deadline_extension_days, project_config FROM kt_plans WHERE id = %s"
         plan_res = execute_query(plan_query, (plan_id,))
         if not plan_res:
             logger.error(f"Final Assessment Reminder Error: Plan {plan_id} not found.")
@@ -752,7 +752,11 @@ def _send_final_assessment_reminder_async(plan_id):
         plan_info = plan_res[0]
         app_name = plan_info.get('application_name') or f"Plan #{plan_id}"
         is_unlocked = bool(plan_info.get('is_final_unlocked'))
-        deadline_days = plan_info.get('final_deadline_extension_days') or 90
+        deadline_days = plan_info.get('final_deadline_extension_days')
+        if not deadline_days or deadline_days == 90:
+            from services.plan_service import get_reverse_kt_days_from_config
+            rkt_days = get_reverse_kt_days_from_config(plan_info.get('project_config'))
+            deadline_days = rkt_days if (rkt_days and rkt_days > 0) else (deadline_days or 90)
 
         # 2. Check if plan topics are completed or if manager unlocked
         comp_query = """

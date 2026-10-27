@@ -25,6 +25,8 @@ def input_rail(payload: dict, required_fields: list, endpoint: str) -> tuple[boo
             return False, reason
             
     for k, v in payload.items():
+        if k in ['plan_content', 'generated_content', 'content', 'project_config']:
+            continue
         if isinstance(v, str):
             if len(v) > 5000:
                 reason = f"Field {k} exceeds 5000 characters"

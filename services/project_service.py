@@ -55,6 +55,10 @@ def filter_checked_options(data):
                 if k in t.get('inputs', {}):
                     filtered_inputs[k] = t['inputs'][k]
         
+        if not (filtered_options.get('reverse_kt') and filtered_options.get('rkt_assessment')):
+            filtered_options.pop('assessment_80', None)
+            filtered_inputs.pop('assessment_80', None)
+        
         new_modules = []
         for m in t.get('modules', []):
             m_opts = {}
@@ -64,6 +68,9 @@ def filter_checked_options(data):
                     m_opts[k] = True
                     if k in m.get('inputs', {}):
                         m_inps[k] = m['inputs'][k]
+            if not (m_opts.get('reverse_kt') and m_opts.get('rkt_assessment')):
+                m_opts.pop('assessment_80', None)
+                m_inps.pop('assessment_80', None)
             m['options'] = m_opts
             m['inputs'] = m_inps
             new_modules.append(m)
@@ -127,10 +134,21 @@ def update_project(project_id, data):
                             new_plan_config = copy.deepcopy(filtered_project_data)
                             new_plan_config['_meta'] = meta
                             
-                            cursor.execute(
-                                "UPDATE kt_plans SET project_config = %s WHERE id = %s",
-                                (json.dumps(new_plan_config), plan['id'])
-                            )
+                            from services.plan_service import get_reverse_kt_days_from_config, recalculate_plan_timeline_service
+                            rkt_days = get_reverse_kt_days_from_config(new_plan_config)
+                            if rkt_days and rkt_days > 0:
+                                new_plan_config['final_deadline_extension_days'] = rkt_days
+                                cursor.execute(
+                                    "UPDATE kt_plans SET project_config = %s, final_deadline_extension_days = %s WHERE id = %s",
+                                    (json.dumps(new_plan_config), rkt_days, plan['id'])
+                                )
+                                conn.commit()
+                                recalculate_plan_timeline_service(plan['id'], rkt_days)
+                            else:
+                                cursor.execute(
+                                    "UPDATE kt_plans SET project_config = %s WHERE id = %s",
+                                    (json.dumps(new_plan_config), plan['id'])
+                                )
                     except Exception:
                         pass
                         

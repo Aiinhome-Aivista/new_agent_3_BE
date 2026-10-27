@@ -54,7 +54,7 @@ def generate_questions():
         else:
             # Final Assessment (Mandatory) or default: fetch plan assessment settings for manager overrides
             plan_settings_res = execute_query(
-                "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s",
+                "SELECT is_final_unlocked, final_deadline_extension_days, project_config FROM kt_plans WHERE id = %s",
                 (plan_id,)
             )
             is_unlocked = False
@@ -62,11 +62,19 @@ def generate_questions():
             if plan_settings_res:
                 is_unlocked = bool(plan_settings_res[0].get('is_final_unlocked'))
                 days_val = plan_settings_res[0].get('final_deadline_extension_days')
+                from services.plan_service import get_reverse_kt_days_from_config
+                rkt_days = get_reverse_kt_days_from_config(plan_settings_res[0].get('project_config'))
                 if days_val is not None:
                     try:
-                        deadline_days = int(days_val)
+                        days_int = int(days_val)
+                        if days_int == 90 and rkt_days and rkt_days > 0 and rkt_days != 90:
+                            deadline_days = rkt_days
+                        else:
+                            deadline_days = days_int
                     except (ValueError, TypeError):
-                        deadline_days = 90
+                        deadline_days = rkt_days if (rkt_days and rkt_days > 0) else 90
+                else:
+                    deadline_days = rkt_days if (rkt_days and rkt_days > 0) else 90
 
             completed_topics_res = execute_query(
                 "SELECT topic, last_updated FROM completion_tracking WHERE plan_id = %s AND completion_percent = 100",
@@ -492,10 +500,10 @@ def get_attempt_details(asid):
 def get_plan_assessment_settings(plan_id):
     try:
         try:
-            query = "SELECT is_final_unlocked, final_deadline_extension_days, unlocked_on FROM kt_plans WHERE id = %s"
+            query = "SELECT is_final_unlocked, final_deadline_extension_days, unlocked_on, project_config FROM kt_plans WHERE id = %s"
             res = execute_query(query, (plan_id,))
         except Exception:
-            query = "SELECT is_final_unlocked, final_deadline_extension_days FROM kt_plans WHERE id = %s"
+            query = "SELECT is_final_unlocked, final_deadline_extension_days, project_config FROM kt_plans WHERE id = %s"
             res = execute_query(query, (plan_id,))
 
         if not res:
@@ -504,8 +512,14 @@ def get_plan_assessment_settings(plan_id):
         row = res[0]
         is_unlocked = bool(row.get('is_final_unlocked', False))
         days = row.get('final_deadline_extension_days')
-        if days is None:
-            days = 90
+
+        from services.plan_service import get_reverse_kt_days_from_config
+        rkt_days = get_reverse_kt_days_from_config(row.get('project_config'))
+
+        if days is None or (days == 90 and rkt_days and rkt_days > 0 and rkt_days != 90):
+            days = rkt_days if (rkt_days and rkt_days > 0) else 90
+            if rkt_days and rkt_days > 0 and rkt_days != 90:
+                execute_write("UPDATE kt_plans SET final_deadline_extension_days = %s WHERE id = %s", (rkt_days, plan_id))
             
         unlocked_on_val = row.get('unlocked_on')
         unlocked_on_str = unlocked_on_val.isoformat() if hasattr(unlocked_on_val, 'isoformat') else (str(unlocked_on_val) if unlocked_on_val else None)
