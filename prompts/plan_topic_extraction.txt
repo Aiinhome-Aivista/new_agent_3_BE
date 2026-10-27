@@ -21,15 +21,15 @@ CRITICAL EXTRACTION RULES FOR POST-KA PHASES:
    - "topic_name": "Mandatory Final Assessment Evaluation Window"
    - "estimated_duration_hours": "N*24 Hours (N Days)" (e.g. for 3 days -> "72 Hours (3 Days)", for 90 days -> "2160 Hours (90 Days)")
 
-3. For Shadow Resourcing Phase:
-   - "day_label": "Day X to Day Y (Shadow Phase)" (e.g. "Day 111 to Day 124 (Shadow Phase)")
+3. For Shadow Support Phase:
+   - "day_label": "Day X to Day Y (Shadow Support Phase)" (e.g. "Day 27 to Day 29 (Shadow Support Phase)")
    - "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution"
-   - "estimated_duration_hours": "336 Hours (14 Days / 2 Weeks)"
+   - "estimated_duration_hours": "N*24 Hours (N Days)" (e.g. for 3 days -> "72 Hours (3 Days)", for 14 days -> "336 Hours (14 Days / 2 Weeks)")
 
-4. For Lead Resourcing Phase:
-   - "day_label": "Day X onwards (Lead Phase)" (e.g. "Day 125 onwards (Lead Phase)")
+4. For Lead Support Phase:
+   - "day_label": "Day X to Day Y (Lead Support Phase)" or "Day X onwards (Lead Support Phase)"
    - "topic_name": "Independent Project Leadership & Transition Completion"
-   - "estimated_duration_hours": "Ongoing (Lead Phase)"
+   - "estimated_duration_hours": "N*24 Hours (N Days)" or "Ongoing (Lead Support Phase)" (e.g. for 3 days -> "72 Hours (3 Days)")
 
 5. PROHIBITION: DO NOT extract any bullet line starting with "Timeline:" or "• Timeline:" as an additional topic row! Ignore timeline bullet lines.
 

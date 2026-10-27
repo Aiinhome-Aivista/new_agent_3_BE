@@ -30,10 +30,10 @@ def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
     )
     return new_id
 
-def get_reverse_kt_days_from_config(project_config):
+def get_phase_days_from_config(project_config, phase_key):
     """
-    Extract allocated Reverse KT duration (in days) from project_config.
-    Checks track/module specific configuration using _meta if available,
+    Extract allocated duration (in days) for a given phase ('ka', 'reverse_kt', 'shadow_resourcing', 'lead_resourcing')
+    from project_config. Checks track/module specific configuration using _meta if available,
     or falls back to general tracks or phaseDurations.
     """
     if not project_config:
@@ -75,16 +75,23 @@ def get_reverse_kt_days_from_config(project_config):
         options = project_config.get('phaseSelected', {})
         durations = project_config.get('phaseDurations', {})
 
-    # If options explicitly says reverse_kt is disabled (False) and no duration entered, return None
-    if options and not options.get('reverse_kt') and not options.get('rkt_assessment'):
-        if not (durations and durations.get('reverse_kt') and str(durations.get('reverse_kt')).isdigit() and int(durations.get('reverse_kt')) > 0):
-            return None
+    # Check if this phase is enabled in options
+    is_active = True
+    if options:
+        if phase_key == 'reverse_kt':
+            is_active = bool(options.get('reverse_kt') or options.get('rkt_assessment'))
+        else:
+            is_active = bool(options.get(phase_key))
+
+    # If options explicitly says disabled (False) and no duration entered, return None
+    if not is_active and not (durations and durations.get(phase_key) and str(durations.get(phase_key)).isdigit() and int(durations.get(phase_key)) > 0):
+        return None
 
     if durations:
-        rkt_val = durations.get('reverse_kt')
-        if rkt_val is not None and str(rkt_val).strip() != '':
+        val = durations.get(phase_key)
+        if val is not None and str(val).strip() != '':
             try:
-                val_int = int(rkt_val)
+                val_int = int(val)
                 if val_int > 0:
                     return val_int
             except (ValueError, TypeError):
@@ -92,34 +99,37 @@ def get_reverse_kt_days_from_config(project_config):
 
     phase_durs = project_config.get('phaseDurations', {})
     if phase_durs:
-        rkt_val = phase_durs.get('reverse_kt')
-        if rkt_val is not None and str(rkt_val).strip() != '':
+        val = phase_durs.get(phase_key)
+        if val is not None and str(val).strip() != '':
             try:
-                val_int = int(rkt_val)
+                val_int = int(val)
                 if val_int > 0:
                     return val_int
             except (ValueError, TypeError):
                 pass
 
-    saved_days = project_config.get('final_deadline_extension_days')
-    if saved_days is not None and str(saved_days).isdigit() and int(saved_days) > 0 and int(saved_days) != 90:
-        return int(saved_days)
+    if phase_key == 'reverse_kt':
+        saved_days = project_config.get('final_deadline_extension_days')
+        if saved_days is not None and str(saved_days).isdigit() and int(saved_days) > 0 and int(saved_days) != 90:
+            return int(saved_days)
 
     # Fallback to date-based allocation if durations dictionary was not directly filled
     start_str = project_config.get('startDate') or project_config.get('start_date')
     end_str = project_config.get('endDate') or project_config.get('end_date')
-    if start_str and end_str and options and (options.get('reverse_kt') or options.get('rkt_assessment')):
+    if start_str and end_str and options and is_active:
         try:
             from datetime import datetime
             s_d = datetime.strptime(str(start_str)[:10], '%Y-%m-%d')
             e_d = datetime.strptime(str(end_str)[:10], '%Y-%m-%d')
             total_days = max(1, (e_d - s_d).days + 1)
             sel = [p for p in ['ka', 'reverse_kt', 'shadow_resourcing', 'lead_resourcing'] if options.get(p)]
-            if 'reverse_kt' in sel:
+            if phase_key in sel:
                 if len(sel) == 1:
                     return total_days
                 elif len(sel) > 1:
                     ka_share = int(round(total_days * 0.70)) if 'ka' in sel else 0
+                    if phase_key == 'ka':
+                        return ka_share
                     rem = total_days - ka_share
                     other_cnt = len(sel) - (1 if 'ka' in sel else 0)
                     if other_cnt > 0:
@@ -129,6 +139,15 @@ def get_reverse_kt_days_from_config(project_config):
             pass
 
     return None
+
+def get_reverse_kt_days_from_config(project_config):
+    return get_phase_days_from_config(project_config, 'reverse_kt')
+
+def get_shadow_days_from_config(project_config):
+    return get_phase_days_from_config(project_config, 'shadow_resourcing')
+
+def get_lead_days_from_config(project_config):
+    return get_phase_days_from_config(project_config, 'lead_resourcing')
 
 def get_session_allocation_text(project_config):
     if not project_config:
@@ -335,6 +354,28 @@ def get_session_allocation_text(project_config):
         except (ValueError, TypeError):
             pass
 
+    ss_days = durations.get('shadow_resourcing') if (durations and durations.get('shadow_resourcing') is not None) else allocations.get('Shadow Support')
+    if has_ss and ss_days:
+        try:
+            ss_days_int = int(ss_days)
+            if ss_days_int > 0:
+                dist_text += f"\n    [SPECIAL TIMING RULE FOR SHADOW SUPPORT]\n"
+                dist_text += f"    Shadow Support is configured with duration: {ss_days_int} days.\n"
+                dist_text += f"    The Shadow Support Phase timing MUST span EXACTLY {ss_days_int} days immediately following Final Assessment, strictly matching the Shadow Support allocated duration.\n"
+        except (ValueError, TypeError):
+            pass
+
+    ls_days = durations.get('lead_resourcing') if (durations and durations.get('lead_resourcing') is not None) else allocations.get('Lead Support')
+    if has_ls and ls_days:
+        try:
+            ls_days_int = int(ls_days)
+            if ls_days_int > 0:
+                dist_text += f"\n    [SPECIAL TIMING RULE FOR LEAD SUPPORT]\n"
+                dist_text += f"    Lead Support is configured with duration: {ls_days_int} days.\n"
+                dist_text += f"    The Lead Support Phase timing MUST span EXACTLY {ls_days_int} days immediately following Shadow Support, strictly matching the Lead Support allocated duration.\n"
+        except (ValueError, TypeError):
+            pass
+
     return dist_text
 
 def generate_plan_service(application_name, scope_description, plan_type, user_email=None, user_full_name=None, user_role=None, reverse_kt_focus=None, project_config=None, project_id=None, plan_content=None):
@@ -358,9 +399,20 @@ def generate_plan_service(application_name, scope_description, plan_type, user_e
         start_date = project_config.get('startDate') or project_config.get('start_date') or 'Not Specified'
         end_date = project_config.get('endDate') or project_config.get('end_date') or 'Not Specified'
 
-    # Determine assessment duration based on Reverse KT allocated duration
+    # Determine phase durations from project_config
     rkt_days = get_reverse_kt_days_from_config(project_config)
     assessment_days = rkt_days if (rkt_days and rkt_days > 0) else 3
+
+    shadow_days_cfg = get_shadow_days_from_config(project_config)
+    shadow_days = shadow_days_cfg if (shadow_days_cfg is not None and shadow_days_cfg > 0) else 3
+
+    lead_days_cfg = get_lead_days_from_config(project_config)
+    lead_days = lead_days_cfg if (lead_days_cfg is not None and lead_days_cfg > 0) else 3
+
+    if lead_days and lead_days > 0:
+        lead_timeline_format = f"Day (K+{assessment_days}+{shadow_days}+1) to Day (K+{assessment_days}+{shadow_days}+{lead_days}) ({lead_days} Days)"
+    else:
+        lead_timeline_format = f"Day (K+{assessment_days}+{shadow_days}+1) onwards"
 
     # If full plan content is supplied from an uploaded document, bypass LLM generation
     if plan_content and isinstance(plan_content, str) and plan_content.strip():
@@ -376,11 +428,14 @@ def generate_plan_service(application_name, scope_description, plan_type, user_e
             scope_description=scope_description,
             focus_text=focus_text,
             project_config_text=project_config_text,
-            assessment_days=assessment_days
+            assessment_days=assessment_days,
+            shadow_days=shadow_days,
+            lead_days=lead_days,
+            lead_timeline_format=lead_timeline_format
         )
         # Call LLM
         generated_content = call_llm(prompt)
-        generated_content = sanitize_and_resolve_timeline(generated_content, assessment_days)
+        generated_content = sanitize_and_resolve_timeline(generated_content, assessment_days, shadow_days, lead_days)
     
     if project_config:
         project_config['final_deadline_extension_days'] = assessment_days
@@ -394,7 +449,7 @@ def generate_plan_service(application_name, scope_description, plan_type, user_e
     plan_id = execute_write(query, params)
     
     # Extract topics
-    extract_and_save_topics(plan_id, generated_content, default_asmt_days=assessment_days)
+    extract_and_save_topics(plan_id, generated_content, default_asmt_days=assessment_days, default_shadow_days=shadow_days, default_lead_days=lead_days)
 
     # Enforce exact timeline synchronization across content and topics
     recalculate_plan_timeline_service(plan_id, assessment_days)
@@ -427,9 +482,20 @@ def generate_tentative_plan_service(application_name, scope_description, plan_ty
         start_date = project_config.get('startDate') or project_config.get('start_date') or 'Not Specified'
         end_date = project_config.get('endDate') or project_config.get('end_date') or 'Not Specified'
 
-    # Determine assessment duration based on Reverse KT allocated duration
+    # Determine phase durations from project_config
     rkt_days = get_reverse_kt_days_from_config(project_config)
     assessment_days = rkt_days if (rkt_days and rkt_days > 0) else 3
+
+    shadow_days_cfg = get_shadow_days_from_config(project_config)
+    shadow_days = shadow_days_cfg if (shadow_days_cfg is not None and shadow_days_cfg > 0) else 3
+
+    lead_days_cfg = get_lead_days_from_config(project_config)
+    lead_days = lead_days_cfg if (lead_days_cfg is not None and lead_days_cfg > 0) else 3
+
+    if lead_days and lead_days > 0:
+        lead_timeline_format = f"Day (K+{assessment_days}+{shadow_days}+1) to Day (K+{assessment_days}+{shadow_days}+{lead_days}) ({lead_days} Days)"
+    else:
+        lead_timeline_format = f"Day (K+{assessment_days}+{shadow_days}+1) onwards"
 
     prompt = load_prompt(
         "plan_generation.txt",
@@ -441,11 +507,14 @@ def generate_tentative_plan_service(application_name, scope_description, plan_ty
         scope_description=scope_description,
         focus_text=focus_text,
         project_config_text=project_config_text,
-        assessment_days=assessment_days
+        assessment_days=assessment_days,
+        shadow_days=shadow_days,
+        lead_days=lead_days,
+        lead_timeline_format=lead_timeline_format
     )
 
     generated_content = call_llm(prompt)
-    generated_content = sanitize_and_resolve_timeline(generated_content, assessment_days)
+    generated_content = sanitize_and_resolve_timeline(generated_content, assessment_days, shadow_days, lead_days)
 
     return {
         "generated_content": generated_content,
@@ -454,7 +523,7 @@ def generate_tentative_plan_service(application_name, scope_description, plan_ty
         "scope_description": scope_description
     }
 
-def sanitize_and_resolve_timeline(content, assessment_days=None):
+def sanitize_and_resolve_timeline(content, assessment_days=None, shadow_days=None, lead_days=None):
     """
     Deterministically resolves any {K...} or Day (K...) placeholders in plan markdown text
     into concrete day numbers based on the actual KA phase duration.
@@ -466,116 +535,136 @@ def sanitize_and_resolve_timeline(content, assessment_days=None):
 
     import re
 
-    # 1. Determine ka_last_day (K) from markdown text before Post-KA phases
+    # 1. Determine ka_last_day (K) from all KA Day headers across content
     normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', content, flags=re.IGNORECASE)
-    ka_part = re.split(r'#{0,4}\s*Final\s*Assessment|#{0,4}\s*Shadow\s*Resourcing|#{0,4}\s*Lead\s*Resourcing|Final\s*Assessment\s*Evaluation\s*Window', normalized_content, flags=re.IGNORECASE)[0]
-    day_matches = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', ka_part, re.MULTILINE | re.IGNORECASE)]
+    day_matches = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
     ka_last_day = max(day_matches) if day_matches else 1
 
-    # If assessment_days not provided, attempt to parse from content or default to 3
+    # Extract days from content if not provided
     if assessment_days is None:
-        asmt_day_match = re.search(r'Final\s*Assessment\s*Evaluation\s*Window[^\n]*?:\s*(\d+)\s*Days', content, re.IGNORECASE)
-        rkt_match = re.search(r'Reverse\s*KT[^\n]*?(\d+)\s*Days', content, re.IGNORECASE)
-        if asmt_day_match and int(asmt_day_match.group(1)) != 90:
-            assessment_days = int(asmt_day_match.group(1))
-        elif rkt_match and int(rkt_match.group(1)) != 90:
-            assessment_days = int(rkt_match.group(1))
-        elif asmt_day_match:
-            assessment_days = int(asmt_day_match.group(1))
-        else:
-            assessment_days = 3
+        asmt_match = re.search(r'(?:Final\s*Assessment|Reverse\s*KT)[^\n]*?(?:Duration:\s*|allocated\s*by\s*Manager:\s*)(\d+)\s*Days', content, re.IGNORECASE)
+        assessment_days = int(asmt_match.group(1)) if asmt_match else 3
+
+    if shadow_days is None:
+        sr_match = re.search(r'Shadow\s*(?:Resourcing|Support)[^\n]*?(?:Duration:\s*)?(\d+)\s*Days', content, re.IGNORECASE)
+        shadow_days = int(sr_match.group(1)) if sr_match else 3
+
+    if lead_days is None:
+        lr_match = re.search(r'Lead\s*(?:Resourcing|Support)[^\n]*?(?:Duration:\s*)?(\d+)\s*Days', content, re.IGNORECASE)
+        lead_days = int(lr_match.group(1)) if lr_match else 3
 
     asmt_start = ka_last_day + 1
     asmt_end = ka_last_day + assessment_days
     sr_start = asmt_end + 1
-    sr_end = sr_start + 13  # 14 days / 2 weeks
+    sr_end = sr_start + shadow_days - 1
     lr_start = sr_end + 1
 
-    # 2. Update Final Assessment section
+    asmt_timeline = f"Day {asmt_start} to Day {asmt_end} ({assessment_days} Days)"
+    sr_timeline = f"Day {sr_start} to Day {sr_end} ({shadow_days} Days)"
+    if lead_days and lead_days > 0:
+        lr_end = lr_start + lead_days - 1
+        lr_timeline = f"Day {lr_start} to Day {lr_end} ({lead_days} Days)"
+    else:
+        lr_timeline = f"Day {lr_start} onwards"
+
+    # Separate content before the last KA Day from post-KA phase breakdown
+    last_day_pattern = rf'^\s*Day\s+{ka_last_day}\s*:'
+    m_last_day = list(re.finditer(last_day_pattern, normalized_content, re.MULTILINE | re.IGNORECASE))
+    split_pos = m_last_day[-1].start() if m_last_day else 0
+
+    prefix = normalized_content[:split_pos]
+    tail = normalized_content[split_pos:]
+
+    # 2. Synchronize milestones in prefix (Timeline & Schedule Overview)
+    prefix = re.sub(
+        r'(\*\*(?:Final\s*Assessment|Reverse\s*KT)[^\n]*\n\s*Duration:\s*)\d+(\s*days\s*)\([^\)]*\)',
+        rf'\g<1>{assessment_days}\g<2>(Day {asmt_start} to Day {asmt_end})',
+        prefix,
+        flags=re.IGNORECASE
+    )
+    # Ensure titles in prefix use Shadow Support Phase and Lead Support Phase
+    prefix = re.sub(r'\*\*Shadow\s*Resourcing(?:\s*\(SR\))?\s*Phase:?\*\*', '**Shadow Support Phase:**', prefix, flags=re.IGNORECASE)
+    prefix = re.sub(
+        r'(\*\*Shadow\s*Support\s*Phase[^\n]*\n\s*Duration:\s*)\d+(\s*days\s*)\([^\)]*\)',
+        rf'\g<1>{shadow_days}\g<2>(Day {sr_start} to Day {sr_end})',
+        prefix,
+        flags=re.IGNORECASE
+    )
+    prefix = re.sub(r'\*\*Lead\s*Resourcing(?:\s*\(LR\))?\s*Phase:?\*\*', '**Lead Support Phase:**', prefix, flags=re.IGNORECASE)
+    if lead_days and lead_days > 0:
+        prefix = re.sub(
+            r'(\*\*Lead\s*Support\s*Phase[^\n]*\n\s*Duration:\s*)\d+(\s*days\s*)\([^\)]*\)',
+            rf'\g<1>{lead_days}\g<2>(Day {lr_start} to Day {lr_end})',
+            prefix,
+            flags=re.IGNORECASE
+        )
+
+    # 3. Update Final Assessment in tail
     def update_asmt(m):
-        header = m.group(1)
-        body = m.group(2)
-        body = re.sub(
-            r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+',
-            rf'\g<1>Day {asmt_start} to Day {asmt_end} ({assessment_days} Days)',
-            body,
-            count=1,
-            flags=re.IGNORECASE
-        )
-        body = re.sub(
-            r'((?:Mandatory\s*)?Final\s*Assessment\s*Evaluation\s*Window[^\n]*?:\s*)\d+(\s*Days)',
-            rf'\g<1>{assessment_days}\g<2>',
-            body,
-            flags=re.IGNORECASE
-        )
-        return header + body
+        body = m.group(1)
+        body = re.sub(r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+', rf'\g<1>{asmt_timeline}', body, count=1, flags=re.IGNORECASE)
+        body = re.sub(r'((?:Mandatory\s*)?Final\s*Assessment\s*Evaluation\s*Window[^\n]*?:\s*)\d+(\s*Days)', rf'\g<1>{assessment_days}\g<2>', body, flags=re.IGNORECASE)
+        return '\n\n#### Final Assessment Evaluation Window\n' + body.strip() + '\n\n'
 
-    content = re.sub(
-        r'(#{0,4}\s*Final\s*Assessment[^\n]*\n)([\s\S]*?)(?=\n#{0,4}\s*Shadow|\n#{0,4}\s*Lead|\n##|\Z)',
+    tail = re.sub(
+        r'(?:#{1,4}\s*|\*{0,2})Final\s*Assessment\s*Evaluation\s*Window[^\n]*\n([\s\S]*?)(?=(?:#{1,4}\s*|\*{0,2})Shadow\s*(?:Resourcing|Support)|\n##|\Z)',
         update_asmt,
-        content,
+        tail,
+        count=1,
         flags=re.IGNORECASE
     )
 
-    # 3. Update Shadow Resourcing section
+    # 4. Update Shadow Support in tail
     def update_sr(m):
-        header = m.group(1)
-        body = m.group(2)
-        body = re.sub(
-            r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+',
-            rf'\g<1>Day {sr_start} to Day {sr_end} (Week 1-2: 14 Days / 2 Weeks)',
-            body,
-            count=1,
-            flags=re.IGNORECASE
-        )
-        return header + body
+        body = m.group(1)
+        body = re.sub(r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+', rf'\g<1>{sr_timeline}', body, count=1, flags=re.IGNORECASE)
+        return '#### Shadow Support Phase\n' + body.strip() + '\n\n'
 
-    content = re.sub(
-        r'(#{0,4}\s*Shadow\s*Resourcing[^\n]*\n)([\s\S]*?)(?=\n#{0,4}\s*Lead|\n##|\Z)',
+    tail = re.sub(
+        r'(?:#{1,4}\s*|\*{0,2})Shadow\s*(?:Resourcing|Support)(?:\s*\(SR\))?\s*Phase[^\n]*\n([\s\S]*?)(?=(?:#{1,4}\s*|\*{0,2})Lead\s*(?:Resourcing|Support)|\n##|\Z)',
         update_sr,
-        content,
+        tail,
+        count=1,
         flags=re.IGNORECASE
     )
 
-    # 4. Update Lead Resourcing section
+    # 5. Update Lead Support in tail
     def update_lr(m):
-        header = m.group(1)
-        body = m.group(2)
-        body = re.sub(
-            r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+',
-            rf'\g<1>Day {lr_start} onwards',
-            body,
-            count=1,
-            flags=re.IGNORECASE
-        )
-        return header + body
+        body = m.group(1)
+        body = re.sub(r'([•\*]?\s*\**Timeline:\**\s*)[^\n]+', rf'\g<1>{lr_timeline}', body, count=1, flags=re.IGNORECASE)
+        return '#### Lead Support Phase\n' + body.strip() + '\n\n'
 
-    content = re.sub(
-        r'(#{0,4}\s*Lead\s*Resourcing[^\n]*\n)([\s\S]*?)(?=\n##|\Z)',
+    tail = re.sub(
+        r'(?:#{1,4}\s*|\*{0,2})Lead\s*(?:Resourcing|Support)(?:\s*\(LR\))?\s*Phase[^\n]*\n([\s\S]*?)(?=\n#{1,3}\s+[A-Z]|\n##|\Z)',
         update_lr,
-        content,
+        tail,
+        count=1,
         flags=re.IGNORECASE
     )
 
-    # 5. Global regex fallback to safely evaluate ANY remaining {K+...} or (K+...) expressions anywhere in the content
+    # Replace any residual 'Shadow Resourcing' or 'Lead Resourcing' text in tail
+    tail = re.sub(r'Shadow\s*Resourcing(?:\s*\(SR\))?\s*Phase', 'Shadow Support Phase', tail, flags=re.IGNORECASE)
+    tail = re.sub(r'Lead\s*Resourcing(?:\s*\(LR\))?\s*Phase', 'Lead Support Phase', tail, flags=re.IGNORECASE)
+
+    # 6. Global regex fallback to safely evaluate ANY remaining {K+...} or (K+...) expressions anywhere in the content
     def eval_k_expr(m):
-        prefix = m.group(1) or ""
+        pref = m.group(1) or ""
         expr = m.group(2)
         try:
             clean_expr = re.sub(r'[Kk]', str(ka_last_day), expr)
             if re.match(r'^[\d\+\-\s]+$', clean_expr):
                 val = eval(clean_expr)
-                return f"{prefix}{val}"
+                return f"{pref}{val}"
         except Exception:
             pass
         return m.group(0)
 
-    content = re.sub(r'(Day\s+)?[\{\(]([Kk][\d\+\-\s]*)[\}\)]', eval_k_expr, content)
-    content = re.sub(r'Day\s+([Kk]\s*[\+\-]\s*\d+)', lambda m: f"Day {eval(re.sub(r'[Kk]', str(ka_last_day), m.group(1)))}", content)
+    tail = re.sub(r'(Day\s+)?[\{\(]([Kk][\d\+\-\s]*)[\}\)]', eval_k_expr, tail)
+    tail = re.sub(r'Day\s+([Kk]\s*[\+\-]\s*\d+)', lambda m: f"Day {eval(re.sub(r'[Kk]', str(ka_last_day), m.group(1)))}", tail)
 
-    return content
+    return prefix + tail
 
-def convert_markdown_to_docx(content, application_name="Application", plan_type="KT"):
+def convert_markdown_to_docx(content, application_name="Application", plan_type="KT", project_config=None):
     """Converts KT plan markdown to a professionally formatted Word Document (.docx)."""
     import io
     import re
@@ -584,7 +673,10 @@ def convert_markdown_to_docx(content, application_name="Application", plan_type=
     from datetime import datetime
 
     # Ensure timeline placeholders like {K+1} are resolved to actual day numbers
-    content = sanitize_and_resolve_timeline(content)
+    asmt_days = get_reverse_kt_days_from_config(project_config) or 3
+    sr_days = get_shadow_days_from_config(project_config) or 3
+    lr_days = get_lead_days_from_config(project_config) or 3
+    content = sanitize_and_resolve_timeline(content, asmt_days, sr_days, lr_days)
 
     doc = Document()
     
@@ -751,7 +843,7 @@ def parse_topics_directly_from_content(generated_content, default_asmt_days=3):
 
     return topics
 
-def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default_asmt_days=3):
+def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default_asmt_days=3, default_shadow_days=3, default_lead_days=3):
     """Separate KA topics and Post-KA topics, then reconstruct Post-KA topics strictly as: Assessment -> Shadow -> Lead."""
     import re
     
@@ -778,11 +870,11 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
     }
 
     # Shadow Topic
-    s_days = 14
+    s_days = default_shadow_days if default_shadow_days and default_shadow_days > 0 else 3
     s_start = a_end + 1
     s_end = s_start + s_days - 1
-    sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
-    sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+    sr_label = f"Day {s_start} to Day {s_end} (Shadow Support Phase)"
+    sr_dur = f"{s_days * 24} Hours ({s_days} Days)"
         
     sr_topic = {
         "day_label": sr_label,
@@ -792,18 +884,24 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
 
     # Lead Topic
     l_start = s_end + 1
-    lr_label = f"Day {l_start} onwards (Lead Phase)"
+    if default_lead_days and default_lead_days > 0:
+        l_end = l_start + default_lead_days - 1
+        lr_label = f"Day {l_start} to Day {l_end} (Lead Support Phase)"
+        lr_dur = f"{default_lead_days * 24} Hours ({default_lead_days} Days)"
+    else:
+        lr_label = f"Day {l_start} onwards (Lead Support Phase)"
+        lr_dur = "Ongoing (Lead Support Phase)"
         
     lr_topic = {
         "day_label": lr_label,
         "topic_name": "Independent Project Leadership & Transition Completion",
-        "estimated_duration_hours": "Ongoing (Lead Phase)"
+        "estimated_duration_hours": lr_dur
     }
 
     final_topics = ka_topics + [asmt_topic, sr_topic, lr_topic]
     return final_topics
 
-def extract_and_save_topics(plan_id, generated_content, default_asmt_days=3):
+def extract_and_save_topics(plan_id, generated_content, default_asmt_days=3, default_shadow_days=3, default_lead_days=3):
     import re
     normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', generated_content, flags=re.IGNORECASE)
     markdown_days = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
@@ -845,7 +943,7 @@ def extract_and_save_topics(plan_id, generated_content, default_asmt_days=3):
 
     # Enforce exact ceiling of ka_last_day to max_markdown_day
     ka_last_day = max_markdown_day if max_markdown_day > 0 else 1
-    topics = ensure_post_ka_phase_order(topics, generated_content, ka_last_day=ka_last_day, default_asmt_days=default_asmt_days)
+    topics = ensure_post_ka_phase_order(topics, generated_content, ka_last_day=ka_last_day, default_asmt_days=default_asmt_days, default_shadow_days=default_shadow_days, default_lead_days=default_lead_days)
 
     # Clear existing topics if this is a resync and batch insert
     conn = get_connection()
@@ -1060,6 +1158,14 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             
         proj_config['final_deadline_extension_days'] = new_assessment_days
 
+        sr_days = get_shadow_days_from_config(proj_config)
+        if sr_days is None or sr_days <= 0:
+            sr_days = 3
+
+        lr_days = get_lead_days_from_config(proj_config)
+        if lr_days is None or lr_days <= 0:
+            lr_days = 3
+
         # 1. Dynamically determine ka_last_day from markdown text strictly
         normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', content, flags=re.IGNORECASE)
         m_day_matches = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
@@ -1068,11 +1174,11 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
         asmt_start = ka_last_day + 1
         asmt_end = ka_last_day + new_assessment_days
         sr_start = asmt_end + 1
-        sr_end = sr_start + 13 # 14 days
+        sr_end = sr_start + sr_days - 1
         lr_start = sr_end + 1
 
         # 2. Reconstruct the 3 Post-KA Phase blocks in Markdown text cleanly
-        content = sanitize_and_resolve_timeline(content, new_assessment_days)
+        content = sanitize_and_resolve_timeline(content, new_assessment_days, sr_days, lr_days)
 
         # Write updated content and project_config back to kt_plans table
         execute_write(
@@ -1098,12 +1204,17 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
         asmt_label = f"Day {asmt_start} to Day {asmt_end}"
         asmt_dur = f"{asmt_hrs} Hours ({new_assessment_days} Days)"
 
-        sr_days = 14
         sr_hrs = sr_days * 24
-        sr_label = f"Day {sr_start} to Day {sr_end} (Shadow Phase)"
-        sr_dur = f"{sr_hrs} Hours ({sr_days} Days / 2 Weeks)"
+        sr_label = f"Day {sr_start} to Day {sr_end} (Shadow Support Phase)"
+        sr_dur = f"{sr_hrs} Hours ({sr_days} Days)"
 
-        lr_label = f"Day {lr_start} onwards (Lead Phase)"
+        if lr_days and lr_days > 0:
+            lr_end = lr_start + lr_days - 1
+            lr_label = f"Day {lr_start} to Day {lr_end} (Lead Support Phase)"
+            lr_dur = f"{lr_days * 24} Hours ({lr_days} Days)"
+        else:
+            lr_label = f"Day {lr_start} onwards (Lead Support Phase)"
+            lr_dur = "Ongoing (Lead Support Phase)"
 
         execute_write(
             "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
@@ -1115,7 +1226,7 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
         )
         execute_write(
             "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
-            (plan_id, lr_label, "Independent Project Leadership & Transition Completion", "Ongoing (Lead Phase)")
+            (plan_id, lr_label, "Independent Project Leadership & Transition Completion", lr_dur)
         )
 
     except Exception as e:

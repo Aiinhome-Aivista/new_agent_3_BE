@@ -69,12 +69,14 @@ def download_tentative_doc():
     application_name = data.get("application_name", "Application")
     plan_type = data.get("plan_type", "KT")
     
+    project_config = data.get("project_config")
+    
     if not content:
         return jsonify({"success": False, "message": "Plan content is required for download"}), 400
 
     try:
         from services.plan_service import convert_markdown_to_docx
-        bio = convert_markdown_to_docx(content, application_name=application_name, plan_type=plan_type)
+        bio = convert_markdown_to_docx(content, application_name=application_name, plan_type=plan_type, project_config=project_config)
         safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', application_name).strip('_') or 'Plan'
         filename = f"Tentative_{plan_type}_Plan_{safe_name}.docx"
         
@@ -447,13 +449,17 @@ def get_plan_topic_list(plan_id):
 @planning_bp.route('/<int:plan_id>/topics/resync', methods=['POST'])
 def resync_plan_topics(plan_id):
     try:
-        plan_query = "SELECT generated_content FROM kt_plans WHERE id = %s"
+        plan_query = "SELECT generated_content, project_config FROM kt_plans WHERE id = %s"
         plan = execute_query(plan_query, (plan_id,))
         if not plan:
             return jsonify({"success": False, "message": "Plan not found"}), 404
 
-        from services.plan_service import extract_and_save_topics
-        count = extract_and_save_topics(plan_id, plan[0]['generated_content'])
+        from services.plan_service import extract_and_save_topics, get_reverse_kt_days_from_config, get_shadow_days_from_config, get_lead_days_from_config
+        p_cfg = plan[0].get('project_config')
+        asmt_days = get_reverse_kt_days_from_config(p_cfg) or 3
+        sr_days = get_shadow_days_from_config(p_cfg) or 3
+        lr_days = get_lead_days_from_config(p_cfg) or 3
+        count = extract_and_save_topics(plan_id, plan[0]['generated_content'], default_asmt_days=asmt_days, default_shadow_days=sr_days, default_lead_days=lr_days)
         return jsonify({"success": True, "message": f"Re-synced {count} topics", "data": {"count": count}}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -470,8 +476,14 @@ def update_plan(plan_id):
         execute_write(query, (new_content, plan_id))
         
         # Auto re-sync plan_topics when plan content is edited
-        from services.plan_service import extract_and_save_topics
-        topic_count = extract_and_save_topics(plan_id, new_content)
+        plan_query = "SELECT project_config FROM kt_plans WHERE id = %s"
+        plan_res = execute_query(plan_query, (plan_id,))
+        p_cfg = plan_res[0].get('project_config') if plan_res else None
+        from services.plan_service import extract_and_save_topics, get_reverse_kt_days_from_config, get_shadow_days_from_config, get_lead_days_from_config
+        asmt_days = get_reverse_kt_days_from_config(p_cfg) or 3
+        sr_days = get_shadow_days_from_config(p_cfg) or 3
+        lr_days = get_lead_days_from_config(p_cfg) or 3
+        topic_count = extract_and_save_topics(plan_id, new_content, default_asmt_days=asmt_days, default_shadow_days=sr_days, default_lead_days=lr_days)
         
         return jsonify({"success": True, "message": "Plan updated successfully", "topic_count": topic_count}), 200
     except Exception as e:

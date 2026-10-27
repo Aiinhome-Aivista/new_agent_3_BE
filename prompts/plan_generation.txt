@@ -13,7 +13,7 @@ Based on the Project Configuration Details above, you MUST incorporate the follo
 1. Knowledge Acquisition (KA) Phase:
     - This phase consists ONLY of technical knowledge transfer sessions, module walk-throughs, and architecture for the provided Scope & Topics.
     - DURATION RULE: Generate daily 2-hour sessions ONLY for the actual technical topics provided in Scope & Topics. DO NOT repeat topics, DO NOT invent fake filler days, and DO NOT stretch KA Phase artificially! Once all scope topics are covered, STOP generating daily KA sessions immediately.
-    - STRICT PROHIBITION: DO NOT create daily topics for "Shadow Resourcing", "Ticket Resolution", "Practical Shadow Experience", or "Final Assessment Preparation" under the Knowledge Acquisition (KA) phase.
+    - STRICT PROHIBITION: DO NOT create daily topics for "Shadow Support", "Ticket Resolution", "Practical Shadow Experience", or "Final Assessment Preparation" under the Knowledge Acquisition (KA) phase.
     - CONDITIONAL SUD RULE: Allocate a day for preparing the System Understanding Document (SUD) ONLY IF "Reverse KT -> By uploading SUD" or "SUD Mandatory" is explicitly selected in the Project Configuration Details. If SUD is NOT selected in the Project Configuration Details, DO NOT generate any SUD Preparation session!
 
 2. Final Assessment Evaluation Window (DO NOT GENERATE DAILY SESSIONS FOR THIS):
@@ -24,22 +24,24 @@ Based on the Project Configuration Details above, you MUST incorporate the follo
       • Timeline: Day (K+1) to Day (K+{assessment_days}) ({assessment_days} Days) [Calculate the exact numbers!]
       • Mandatory Final Assessment Evaluation Window allocated by Manager: {assessment_days} Days.
 
-3. Shadow Resourcing (SR) Phase:
+3. Shadow Support Phase:
     - CRITICAL TIMING RULE: This phase starts on the day immediately after the Final Assessment evaluation window ends. Calculate actual day numbers!
-    - If "Need to be involved in ticket resolving" is selected with a specific number, explicitly state that the incoming team member must resolve exactly that number of Jira tickets during Shadow Resourcing.
-    - If "Required weeks for shadow resourcing" is selected with a specific number, state that the Shadow Resourcing phase spans exactly that number of weeks, during which the incoming member will closely follow the knowledge giver.
+    - DURATION RULE: The Shadow Support phase duration is EXACTLY {shadow_days} DAYS (strictly matching the allocated Shadow Support duration of {shadow_days} days).
+    - If "Need to be involved in ticket resolving" is selected with a specific number, explicitly state that the incoming team member must resolve exactly that number of Jira tickets during Shadow Support.
+    - If "Required weeks for shadow resourcing" is selected with a specific number, state that the Shadow Support phase spans exactly that number of weeks, during which the incoming member will closely follow the knowledge giver.
     - Output format under its dedicated header (calculate the exact numbers, NEVER output literal '{K'):
-      #### Shadow Resourcing Phase
-      • Timeline: Day (K+{assessment_days}+1) to Day (K+{assessment_days}+14) (Week 1-2: 14 Days / 2 Weeks)
+      #### Shadow Support Phase
+      • Timeline: Day (K+{assessment_days}+1) to Day (K+{assessment_days}+{shadow_days}) ({shadow_days} Days)
       • Practical Shadow Experience & Hands-on Ticket Resolution.
       • Target: Resolve the required number of tickets while shadowing the outgoing lead engineer.
 
-4. Lead Resourcing (LR) Phase:
-    - This phase occurs strictly AFTER the Shadow Resourcing phase completes. Calculate actual day numbers!
+4. Lead Support Phase:
+    - This phase occurs strictly AFTER the Shadow Support phase completes. Calculate actual day numbers!
+    - DURATION RULE: The Lead Support phase timeline MUST strictly follow the configuration: {lead_timeline_format}.
     - Explicitly declare that the incoming member will independently lead the project from this point forward.
     - Output format under its dedicated header:
-      #### Lead Resourcing Phase
-      • Timeline: Day (K+{assessment_days}+15) onwards
+      #### Lead Support Phase
+      • Timeline: {lead_timeline_format}
       • Independent Project Leadership & Transition Completion.
 
 5. PHASE OUTPUT FORMAT RULES:
@@ -50,13 +52,13 @@ Based on the Project Configuration Details above, you MUST incorporate the follo
     • Timeline: Day (K+1) to Day (K+{assessment_days}) ({assessment_days} Days)
     • Mandatory Final Assessment Evaluation Window allocated by Manager: {assessment_days} Days.
 
-    #### Shadow Resourcing Phase
-    • Timeline: Day (K+{assessment_days}+1) to Day (K+{assessment_days}+14) (Week 1-2: 14 Days / 2 Weeks)
+    #### Shadow Support Phase
+    • Timeline: Day (K+{assessment_days}+1) to Day (K+{assessment_days}+{shadow_days}) ({shadow_days} Days)
     • Practical Shadow Experience & Hands-on Ticket Resolution.
     • Target: Resolve the required number of tickets while shadowing the outgoing lead engineer.
 
-    #### Lead Resourcing Phase
-    • Timeline: Day (K+{assessment_days}+15) onwards
+    #### Lead Support Phase
+    • Timeline: {lead_timeline_format}
     • Independent Project Leadership & Transition Completion.
 
 STRICT TIMELINE ALGORITHM (ABSOLUTE REQUIREMENT):
