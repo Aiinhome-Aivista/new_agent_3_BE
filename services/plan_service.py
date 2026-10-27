@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from db import execute_write, execute_query
+from db import execute_write, execute_query, get_connection
 from llm_service import call_llm, load_prompt
 
 def resolve_stakeholder_for_user(user_email, user_full_name, user_role):
@@ -467,9 +467,10 @@ def sanitize_and_resolve_timeline(content, assessment_days=None):
     import re
 
     # 1. Determine ka_last_day (K) from markdown text before Post-KA phases
-    ka_part = re.split(r'#{0,4}\s*Final\s*Assessment|#{0,4}\s*Shadow\s*Resourcing|#{0,4}\s*Lead\s*Resourcing', content, flags=re.IGNORECASE)[0]
-    day_matches = re.findall(r'Day\s+(\d+)', ka_part, re.IGNORECASE)
-    ka_last_day = max([int(d) for d in day_matches]) if day_matches else 1
+    normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', content, flags=re.IGNORECASE)
+    ka_part = re.split(r'#{0,4}\s*Final\s*Assessment|#{0,4}\s*Shadow\s*Resourcing|#{0,4}\s*Lead\s*Resourcing|Final\s*Assessment\s*Evaluation\s*Window', normalized_content, flags=re.IGNORECASE)[0]
+    day_matches = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', ka_part, re.MULTILINE | re.IGNORECASE)]
+    ka_last_day = max(day_matches) if day_matches else 1
 
     # If assessment_days not provided, attempt to parse from content or default to 3
     if assessment_days is None:
@@ -697,10 +698,13 @@ def parse_topics_directly_from_content(generated_content, default_asmt_days=3):
     import re
     topics = []
     
-    # Split content by Day headers or Post-KA H4 headers
-    day_blocks = re.split(r'\n(?=Day\s+\d+:|####\s*Final\s*Assessment|####\s*Shadow\s*Resourcing|####\s*Lead\s*Resourcing)', generated_content, flags=re.IGNORECASE)
+    # Normalize: ensure Day headers always start on a newline
+    normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', generated_content, flags=re.IGNORECASE)
+    markdown_days = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
+    max_markdown_day = max(markdown_days) if markdown_days else 1
     
-    ka_last_day = 1
+    # Split content by Day headers or Post-KA H4 headers
+    day_blocks = re.split(r'\n(?=Day\s+\d+\s*:|####?\s*Final\s*Assessment|####?\s*Shadow\s*Resourcing|####?\s*Lead\s*Resourcing|Final\s*Assessment\s*Evaluation\s*Window)', normalized_content, flags=re.IGNORECASE)
     
     for block in day_blocks:
         block_strip = block.strip()
@@ -711,30 +715,30 @@ def parse_topics_directly_from_content(generated_content, default_asmt_days=3):
         full_day_header = day_match.group(1).strip()
         day_num = int(day_match.group(2))
         
-        # Skip if this is a post-KA phase header wrongly formatted as Day X
+        # Strictly skip if beyond max markdown day or post-KA phase
+        if day_num > max_markdown_day:
+            continue
         if 'assessment' in block_strip.lower() or 'shadow' in block_strip.lower() or 'lead' in block_strip.lower():
             continue
             
-        ka_last_day = max(ka_last_day, day_num)
-        
-        # Find all bullet lines: • Sub-topic Name (N minutes)
-        bullet_matches = re.findall(r'[•\*\-\ufffd]\s*([^\n\(]+?)\s*\((?:Part\s+\d+\s*-\s*)?(\d+)\s*minutes?\)', block_strip, re.IGNORECASE)
-        
-        if bullet_matches:
-            for sub_name, mins_str in bullet_matches:
-                sub_name_clean = sub_name.strip()
-                if 'daily total' in sub_name_clean.lower() or 'timeline:' in sub_name_clean.lower():
-                    continue
-                mins = int(mins_str)
+        lines = block_strip.split('\n')[1:]
+        sub_found = False
+        for line in lines:
+            line_s = line.strip()
+            if not line_s or 'daily total' in line_s.lower() or 'timeline:' in line_s.lower():
+                continue
+            m = re.match(r'^(?:[•\*\-\ufffd]|\d+\.)?\s*([^\(\n]+?)\s*\((?:Part\s+\d+\s*-\s*)?(\d+)\s*minutes?\)', line_s, re.IGNORECASE)
+            if m:
+                sub_name = m.group(1).strip()
+                mins = int(m.group(2))
                 hrs = round(mins / 60.0, 2)
-                hrs_str = f"{hrs:g}"
-                
                 topics.append({
                     "day_label": full_day_header,
-                    "topic_name": sub_name_clean,
-                    "estimated_duration_hours": hrs_str
+                    "topic_name": sub_name,
+                    "estimated_duration_hours": f"{hrs:g}"
                 })
-        else:
+                sub_found = True
+        if not sub_found:
             main_headings = re.findall(r'^\d+\.\s*([^\n]+)', block_strip, re.MULTILINE)
             for h_name in main_headings:
                 h_clean = re.sub(r'\(continued\)', '', h_name, flags=re.IGNORECASE).strip()
@@ -745,61 +749,6 @@ def parse_topics_directly_from_content(generated_content, default_asmt_days=3):
                         "estimated_duration_hours": "2"
                     })
 
-    # Post-KA Phases parsed directly from H4 headers or default
-    asmt_match = re.search(r'####\s*Final\s*Assessment[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE) or re.search(r'Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE)
-    sr_match = re.search(r'####\s*Shadow\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)', generated_content, re.IGNORECASE)
-    lr_match = re.search(r'####\s*Lead\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+onwards', generated_content, re.IGNORECASE)
-
-    if asmt_match:
-        a_start, a_end = int(asmt_match.group(1)), int(asmt_match.group(2))
-        a_days = int(asmt_match.group(3)) if (len(asmt_match.groups()) >= 3 and asmt_match.group(3)) else (a_end - a_start + 1)
-        asmt_label = f"Day {a_start} to Day {a_end}"
-        asmt_hrs = a_days * 24
-        asmt_dur = f"{asmt_hrs} Hours ({a_days} Days)"
-    else:
-        a_days = default_asmt_days
-        a_start = ka_last_day + 1
-        a_end = ka_last_day + a_days
-        asmt_label = f"Day {a_start} to Day {a_end}"
-        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
-
-    topics.append({
-        "day_label": asmt_label,
-        "topic_name": "Mandatory Final Assessment Evaluation Window",
-        "estimated_duration_hours": asmt_dur
-    })
-
-    if sr_match:
-        s_start, s_end = int(sr_match.group(1)), int(sr_match.group(2))
-        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
-        s_days = max(1, s_end - s_start + 1)
-        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
-    else:
-        s_days = 14
-        s_start = a_end + 1
-        s_end = s_start + 13
-        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
-        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
-
-    topics.append({
-        "day_label": sr_label,
-        "topic_name": "Practical Shadow Experience & Hands-on Ticket Resolution",
-        "estimated_duration_hours": sr_dur
-    })
-
-    if lr_match:
-        l_start = int(lr_match.group(1))
-        lr_label = f"Day {l_start} onwards (Lead Phase)"
-    else:
-        l_start = s_end + 1
-        lr_label = f"Day {l_start} onwards (Lead Phase)"
-
-    topics.append({
-        "day_label": lr_label,
-        "topic_name": "Independent Project Leadership & Transition Completion",
-        "estimated_duration_hours": "Ongoing (Lead Phase)"
-    })
-
     return topics
 
 def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default_asmt_days=3):
@@ -807,33 +756,20 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
     import re
     
     ka_topics = []
-    
     for t in topics:
         d_lbl = str(t.get('day_label', ''))
         t_nm = str(t.get('topic_name', ''))
         full_str = (d_lbl + ' ' + t_nm).lower()
-        
         if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
             continue
         ka_topics.append(t)
             
-    # Parse exact timeline numbers from generated_content markdown strictly from H4 headers if present
-    asmt_match = re.search(r'####\s*Final\s*Assessment[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE) or re.search(r'Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)\s*(?:\((\d+)\s*Days\))?', generated_content, re.IGNORECASE)
-    sr_match = re.search(r'####\s*Shadow\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+to\s+Day\s+(\d+)', generated_content, re.IGNORECASE)
-    lr_match = re.search(r'####\s*Lead\s*Resourcing[\s\S]*?Timeline:\s*Day\s+(\d+)\s+onwards', generated_content, re.IGNORECASE)
-
-    # 1. Assessment Topic
-    if asmt_match:
-        a_start, a_end = int(asmt_match.group(1)), int(asmt_match.group(2))
-        a_days = int(asmt_match.group(3)) if (len(asmt_match.groups()) >= 3 and asmt_match.group(3)) else (a_end - a_start + 1)
-        asmt_label = f"Day {a_start} to Day {a_end}"
-        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
-    else:
-        a_days = default_asmt_days
-        a_start = ka_last_day + 1
-        a_end = ka_last_day + a_days
-        asmt_label = f"Day {a_start} to Day {a_end}"
-        asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
+    # Calculate exact Post-KA day numbers directly sequential to ka_last_day
+    a_days = default_asmt_days if default_asmt_days and default_asmt_days > 0 else 3
+    a_start = ka_last_day + 1
+    a_end = ka_last_day + a_days
+    asmt_label = f"Day {a_start} to Day {a_end}"
+    asmt_dur = f"{a_days * 24} Hours ({a_days} Days)"
         
     asmt_topic = {
         "day_label": asmt_label,
@@ -841,18 +777,12 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
         "estimated_duration_hours": asmt_dur
     }
 
-    # 2. Shadow Topic
-    if sr_match:
-        s_start, s_end = int(sr_match.group(1)), int(sr_match.group(2))
-        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
-        s_days = max(1, s_end - s_start + 1)
-        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
-    else:
-        s_days = 14
-        s_start = a_end + 1
-        s_end = s_start + 13
-        sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
-        sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
+    # Shadow Topic
+    s_days = 14
+    s_start = a_end + 1
+    s_end = s_start + s_days - 1
+    sr_label = f"Day {s_start} to Day {s_end} (Shadow Phase)"
+    sr_dur = f"{s_days * 24} Hours ({s_days} Days / 2 Weeks)"
         
     sr_topic = {
         "day_label": sr_label,
@@ -860,13 +790,9 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
         "estimated_duration_hours": sr_dur
     }
 
-    # 3. Lead Topic
-    if lr_match:
-        l_start = int(lr_match.group(1))
-        lr_label = f"Day {l_start} onwards (Lead Phase)"
-    else:
-        l_start = s_end + 1
-        lr_label = f"Day {l_start} onwards (Lead Phase)"
+    # Lead Topic
+    l_start = s_end + 1
+    lr_label = f"Day {l_start} onwards (Lead Phase)"
         
     lr_topic = {
         "day_label": lr_label,
@@ -878,67 +804,69 @@ def ensure_post_ka_phase_order(topics, generated_content, ka_last_day=1, default
     return final_topics
 
 def extract_and_save_topics(plan_id, generated_content, default_asmt_days=3):
-    topics = []
-    try:
-        extraction_prompt = load_prompt("plan_topic_extraction.txt", generated_content=generated_content)
-        extraction_response = call_llm(extraction_prompt)
-        
-        import re
-        clean_json = extraction_response.strip()
-        match = re.search(r'\[.*\]', clean_json, re.DOTALL)
-        if match:
-            clean_json = match.group(0)
-            topics = json.loads(clean_json)
-    except Exception as e:
-        logging.warning(f"LLM topic extraction notice for plan {plan_id}: {e}")
+    import re
+    normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', generated_content, flags=re.IGNORECASE)
+    markdown_days = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
+    max_markdown_day = max(markdown_days) if markdown_days else 1
 
-    # Count extracted KA topics from LLM
-    ka_topics_count = sum(1 for t in topics if 'assessment' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower() and 'shadow' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower() and 'lead' not in (str(t.get('day_label','')) + str(t.get('topic_name',''))).lower())
-
-    # Count total Day X headings in generated_content markdown
-    markdown_day_count = len(re.findall(r'^Day\s+\d+:', generated_content, re.MULTILINE | re.IGNORECASE))
-
-    # If LLM response was truncated or yielded too few topics compared to markdown days, use deterministic Python parser
-    if ka_topics_count < markdown_day_count:
-        topics = parse_topics_directly_from_content(generated_content, default_asmt_days=default_asmt_days)
-    else:
-        # Dynamically determine the maximum KA day (ka_last_day) from extracted topics
-        ka_last_day = 1
-        filtered_topics = []
-        for t in topics:
-            d_label = str(t.get('day_label', ''))
-            t_name = str(t.get('topic_name', ''))
-            full_str = (d_label + ' ' + t_name).lower()
-            
-            # Skip any literal "Timeline:" bullet items accidentally extracted as topic rows
-            if t_name.strip().lower().startswith('timeline:') or t_name.strip().lower().startswith('• timeline:'):
-                continue
-
-            # Skip any LLM-hallucinated daily 2-hour topics for shadow/ticket resolution in post-KA phase
-            if ('shadow' in full_str or 'ticket resolution' in full_str or 'lead' in full_str) and re.search(r'Day\s+(?:1[7-9]|[2-9]\d)', d_label, re.IGNORECASE):
-                continue
-
-            filtered_topics.append(t)
-            if 'assessment' not in full_str and 'shadow' not in full_str and 'lead' not in full_str:
-                day_nums = re.findall(r'Day\s+(\d+)', d_label, re.IGNORECASE)
-                for dn in day_nums:
-                    ka_last_day = max(ka_last_day, int(dn))
-
-        topics = filtered_topics
-
-    # Reconstruct Post-KA topics strictly in order: Assessment -> Shadow -> Lead, matching markdown dates
-    topics = ensure_post_ka_phase_order(topics, generated_content, ka_last_day if 'ka_last_day' in locals() else 1, default_asmt_days=default_asmt_days)
-
-    # Clear existing topics if this is a resync
-    execute_write("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
+    # First attempt: Deterministic direct parser
+    topics = parse_topics_directly_from_content(generated_content, default_asmt_days=default_asmt_days)
     
-    count = 0
-    for item in topics:
-        query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
-        execute_write(query, (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A')))
-        count += 1
+    extracted_days = set()
+    for t in topics:
+        m = re.findall(r'Day\s+(\d+)', str(t.get('day_label', '')), re.IGNORECASE)
+        for dn in m:
+            extracted_days.add(int(dn))
+
+    # Fallback to LLM extraction ONLY if deterministic parser extracted no topics
+    if len(extracted_days) == 0:
+        try:
+            extraction_prompt = load_prompt("plan_topic_extraction.txt", generated_content=generated_content)
+            extraction_response = call_llm(extraction_prompt)
+            clean_json = extraction_response.strip()
+            match = re.search(r'\[.*\]', clean_json, re.DOTALL)
+            if match:
+                llm_topics = json.loads(match.group(0))
+                valid_topics = []
+                for lt in llm_topics:
+                    d_lbl = str(lt.get('day_label', ''))
+                    t_nm = str(lt.get('topic_name', ''))
+                    full_str = (d_lbl + ' ' + t_nm).lower()
+                    if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
+                        continue
+                    dns = [int(x) for x in re.findall(r'Day\s+(\d+)', d_lbl, re.IGNORECASE)]
+                    if any(x > max_markdown_day for x in dns):
+                        continue
+                    valid_topics.append(lt)
+                if len(valid_topics) > 0:
+                    topics = valid_topics
+        except Exception as e:
+            logging.warning(f"LLM topic extraction notice for plan {plan_id}: {e}")
+
+    # Enforce exact ceiling of ka_last_day to max_markdown_day
+    ka_last_day = max_markdown_day if max_markdown_day > 0 else 1
+    topics = ensure_post_ka_phase_order(topics, generated_content, ka_last_day=ka_last_day, default_asmt_days=default_asmt_days)
+
+    # Clear existing topics if this is a resync and batch insert
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM plan_topics WHERE plan_id = %s", (plan_id,))
+        insert_data = [
+            (plan_id, item.get('day_label', 'General'), item.get('topic_name'), item.get('estimated_duration_hours', 'N/A'))
+            for item in topics
+        ]
+        if insert_data:
+            cursor.executemany(
+                "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)",
+                insert_data
+            )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
         
-    return count
+    return len(topics)
 
 def add_topic_service(plan_id, day_label, topic_name, estimated_duration_hours="N/A"):
     query = "INSERT INTO plan_topics (plan_id, day_label, topic_name, estimated_duration_hours) VALUES (%s, %s, %s, %s)"
@@ -1132,29 +1060,10 @@ def recalculate_plan_timeline_service(plan_id, new_assessment_days):
             
         proj_config['final_deadline_extension_days'] = new_assessment_days
 
-        # 1. Dynamically determine ka_last_day from DB plan_topics (checking KA rows ONLY)
-        ka_last_day = 1
-        ka_rows = execute_query(
-            "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s",
-            (plan_id,)
-        )
-        if ka_rows:
-            for r in ka_rows:
-                lbl = str(r.get('day_label', ''))
-                tname = str(r.get('topic_name', ''))
-                full_str = (lbl + ' ' + tname).lower()
-                if 'assessment' in full_str or 'shadow' in full_str or 'lead' in full_str:
-                    continue
-                matches = re.findall(r'Day\s+(\d+)', lbl, re.IGNORECASE)
-                for m in matches:
-                    ka_last_day = max(ka_last_day, int(m))
-
-        # Fallback to ka_content_part in markdown if plan_topics yielded nothing
-        if ka_last_day == 1 and content:
-            ka_content_part = re.split(r'####?\s*Final\s*Assessment', content, flags=re.IGNORECASE)[0]
-            content_day_matches = re.findall(r'Day\s+(\d+)', ka_content_part, re.IGNORECASE)
-            if content_day_matches:
-                ka_last_day = max(int(m) for m in content_day_matches)
+        # 1. Dynamically determine ka_last_day from markdown text strictly
+        normalized_content = re.sub(r'([^\n])(Day\s+\d+\s*:)', r'\1\n\2', content, flags=re.IGNORECASE)
+        m_day_matches = [int(m) for m in re.findall(r'^\s*Day\s+(\d+)\s*:', normalized_content, re.MULTILINE | re.IGNORECASE)]
+        ka_last_day = max(m_day_matches) if m_day_matches else 1
 
         asmt_start = ka_last_day + 1
         asmt_end = ka_last_day + new_assessment_days

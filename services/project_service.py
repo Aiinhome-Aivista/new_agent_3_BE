@@ -46,6 +46,12 @@ def filter_checked_options(data):
         return data
     import copy
     new_data = copy.deepcopy(data)
+    phase_sub_keys = {
+        'ka': ['kt_doc', 'stakeholder_map', 'project_kt_doc_ready', 'sud_mandatory'],
+        'reverse_kt': ['ka_completed', 'rkt_project_kt_doc', 'rkt_assessment'],
+        'shadow_resourcing': ['assessment_80', 'sud_doc_upload', 'ticket_resolving', 'weeks_shadow'],
+        'lead_resourcing': ['lr_ticket_resolving', 'lr_weeks_shadow']
+    }
     for t in new_data.get('tracks', []):
         filtered_options = {}
         filtered_inputs = {}
@@ -55,6 +61,12 @@ def filter_checked_options(data):
                 if k in t.get('inputs', {}):
                     filtered_inputs[k] = t['inputs'][k]
         
+        for phase_id, sub_keys in phase_sub_keys.items():
+            if not filtered_options.get(phase_id):
+                for sk in sub_keys:
+                    filtered_options.pop(sk, None)
+                    filtered_inputs.pop(sk, None)
+
         if not (filtered_options.get('reverse_kt') and filtered_options.get('rkt_assessment')):
             filtered_options.pop('assessment_80', None)
             filtered_inputs.pop('assessment_80', None)
@@ -68,6 +80,11 @@ def filter_checked_options(data):
                     m_opts[k] = True
                     if k in m.get('inputs', {}):
                         m_inps[k] = m['inputs'][k]
+            for phase_id, sub_keys in phase_sub_keys.items():
+                if not m_opts.get(phase_id):
+                    for sk in sub_keys:
+                        m_opts.pop(sk, None)
+                        m_inps.pop(sk, None)
             if not (m_opts.get('reverse_kt') and m_opts.get('rkt_assessment')):
                 m_opts.pop('assessment_80', None)
                 m_inps.pop('assessment_80', None)
