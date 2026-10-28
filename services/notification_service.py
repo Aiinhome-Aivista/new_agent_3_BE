@@ -928,15 +928,15 @@ def _send_final_assessment_reminder_async(plan_id):
 
 
 
-def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None):
-    if not (sud_recipients or shadow_mappings or lead_recipients or final_assessment_recipients):
+def trigger_plan_requirements_notification(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None, reverse_kt_recipients=None):
+    if not (sud_recipients or shadow_mappings or lead_recipients or final_assessment_recipients or reverse_kt_recipients):
         return
-    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients))
+    thread = threading.Thread(target=_send_plan_requirements_notification_async, args=(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients, reverse_kt_recipients))
     thread.daemon = True
     thread.start()
     logger.info(f"Spawned background plan requirements notification thread for plan ID: {plan_id}")
 
-def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None):
+def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients=None, reverse_kt_recipients=None):
     logger.info(f"Plan requirements notification thread started for plan ID: {plan_id}")
     try:
         from services.email_service import EmailService
@@ -1026,6 +1026,10 @@ def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_m
         if sud_recipients:
             sud_sh = fetch_stakeholders(sud_recipients)
             send_requirement_email(sud_sh, "SUD Document Upload Mandatory", f"You are required to upload the SUD document after the last meeting date ({last_date_str}) for the plan {app_name}.")
+
+        if reverse_kt_recipients:
+            rkt_sh = fetch_stakeholders(reverse_kt_recipients)
+            send_requirement_email(rkt_sh, "Reverse KT Phase", f"You have been assigned to participate in the Reverse KT presentation and evaluation phase for the plan {app_name}. Please prepare your demonstration according to the plan criteria (passing threshold: 80% or above).")
             
         if shadow_mappings:
             for mapping in shadow_mappings:
@@ -1043,14 +1047,14 @@ def _send_plan_requirements_notification_async(plan_id, sud_recipients, shadow_m
                     part_names = ", ".join([p['name'] for p in parts_sh])
                     
                     # Email to organizer
-                    send_requirement_email([org], "Shadow Resourcing Phase", f"You have been assigned as the lead for the shadow resources ({part_names}) for the plan {app_name}.")
+                    send_requirement_email([org], "Shadow Support Phase", f"You have been assigned as the lead for the shadow resources ({part_names}) for the plan {app_name}.")
                     
                     # Email to participants
-                    send_requirement_email(parts_sh, "Shadow Resourcing Phase", f"You have been assigned as a shadow resource for the plan {app_name} under the leadership of {org['name']}. This phase will begin after the last meeting date ({last_date_str}).")
+                    send_requirement_email(parts_sh, "Shadow Support Phase", f"You have been assigned as a shadow resource for the plan {app_name} under the leadership of {org['name']}. This phase will begin after the last meeting date ({last_date_str}).")
 
         if lead_recipients:
             lead_sh = fetch_stakeholders(lead_recipients)
-            send_requirement_email(lead_sh, "Lead Resourcing Phase", f"You will be the lead resource after completion of shadow resourcing for the plan {app_name}.")
+            send_requirement_email(lead_sh, "Lead Support Phase", f"You will be the lead resource after completion of shadow support for the plan {app_name}.")
 
         if final_assessment_recipients:
             fa_sh = fetch_stakeholders(final_assessment_recipients)

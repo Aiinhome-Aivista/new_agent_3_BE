@@ -274,6 +274,13 @@ def get_plans():
             plans = execute_query(query)
         for p in plans:
             pid = p['id']
+            if for_dropdown:
+                p['shadow_stakeholder_ids'] = []
+                p['shadow_eligible_stakeholder_ids'] = []
+                p['sud_submitted_stakeholder_ids'] = []
+                p['assessment_passed_stakeholder_ids'] = []
+                continue
+
             try:
                 shadow_map = execute_query("SELECT stakeholder_id FROM resource_mapping WHERE plan_id = %s AND is_shadow = 1", (pid,))
                 p['shadow_stakeholder_ids'] = [r['stakeholder_id'] for r in shadow_map] if shadow_map else []

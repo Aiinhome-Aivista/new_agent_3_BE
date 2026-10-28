@@ -23,23 +23,31 @@ def get_authenticated_user():
         print(f"DEBUG: InvalidTokenError details: {e}")
         raise Exception("Invalid token")
 
-def generate_teams_meeting_link():
-    """Generates a dynamic, standard Microsoft Teams meeting join link."""
-    import uuid
-    import urllib.parse
-    import json
-    meeting_unique_id = uuid.uuid4().hex
-    tenant_id = str(uuid.uuid4())
-    organizer_oid = str(uuid.uuid4())
-    context_obj = {
-        "Tid": tenant_id,
-        "Oid": organizer_oid
-    }
-    context_str = json.dumps(context_obj, separators=(',', ':'))
-    context_encoded = urllib.parse.quote(context_str)
-    thread_id = f"19:meeting_{meeting_unique_id}@thread.v2"
-    thread_encoded = urllib.parse.quote(thread_id)
-    return f"https://teams.microsoft.com/l/meetup-join/{thread_encoded}/0?context={context_encoded}"
+def generate_teams_meeting_link(subject="Dynamic Open Meeting Room"):
+    """Generates an open Microsoft Teams meeting join link with lobby bypass."""
+    try:
+        from services.teams_service import create_open_teams_meeting
+        return create_open_teams_meeting(subject=subject)
+    except Exception as e:
+        import uuid
+        import urllib.parse
+        import json
+        meeting_unique_id = uuid.uuid4().hex
+        tenant_id = os.getenv("AZURE_TENANT_ID") or str(uuid.uuid4())
+        azure_user_id = os.getenv("AZURE_USER_ID", "")
+        if "@" in azure_user_id or len(azure_user_id.strip()) != 36:
+            organizer_oid = str(uuid.uuid4())
+        else:
+            organizer_oid = azure_user_id.strip()
+        context_obj = {
+            "Tid": tenant_id,
+            "Oid": organizer_oid
+        }
+        context_str = json.dumps(context_obj, separators=(',', ':'))
+        context_encoded = urllib.parse.quote(context_str)
+        thread_id = f"19:meeting_{meeting_unique_id}@thread.v2"
+        thread_encoded = urllib.parse.quote(thread_id)
+        return f"https://teams.microsoft.com/l/meetup-join/{thread_encoded}/0?context={context_encoded}"
 
 @scheduling_bp.route('/meetings', methods=['POST'])
 def create_meeting():
@@ -81,38 +89,76 @@ def create_meeting():
         if len(valid_stakeholder_ids) != len(stakeholder_ids):
             return jsonify({"success": False, "message": "Invalid participants detected. Only Knowledge Givers and Receivers can be added."}), 400
 
-        # Fetch plan topics
-        topics_query = "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s ORDER BY id ASC"
-        topics_result = execute_query(topics_query, (data['plan_id'],))
-        
-        if not topics_result:
-            return jsonify({"success": False, "message": "No topics found for this plan"}), 404
+        is_rkt = data.get('is_reverse_kt') or (data.get('title') and 'Reverse KT' in str(data.get('title')))
+        meeting_link_option = data.get('meeting_link_option', 'Single Link for All Days')
+        provided_link = (data.get('meeting_link') or data.get('link') or '').strip()
+        daily_meeting_links = data.get('daily_meeting_links') or {}
+
+        if is_rkt:
+            # Reverse KT presentation & evaluation sessions
+            rkt_days_count = 1
+            current_plan_name = "Session"
+            try:
+                p_row = execute_query("SELECT application_name, project_config FROM kt_plans WHERE id = %s", (data['plan_id'],))
+                if p_row:
+                    current_plan_name = p_row[0]['application_name']
+                    if meeting_link_option == "Different Link for Each Day":
+                        from services.plan_service import get_reverse_kt_days_from_config
+                        allocated_rkt = get_reverse_kt_days_from_config(p_row[0].get('project_config'))
+                        if allocated_rkt and allocated_rkt > 0:
+                            rkt_days_count = allocated_rkt
+                        elif len(daily_meeting_links) > 0:
+                            rkt_days_count = len(daily_meeting_links)
+                        else:
+                            rkt_days_count = 2
+            except Exception as e:
+                print(f"Error determining RKT days: {e}")
+                if meeting_link_option == "Different Link for Each Day":
+                    rkt_days_count = len(daily_meeting_links) if len(daily_meeting_links) > 0 else 2
+
+            day_details = []
+            for i in range(rkt_days_count):
+                title_str = (data.get('title') or f"Reverse KT Presentation - {current_plan_name}")
+                if rkt_days_count > 1:
+                    title_str += f" (Day {i+1})"
+                day_details.append({
+                    "title": title_str,
+                    "start_time": "11:00",
+                    "description": f"Reverse KT Presentation & Evaluation Session {i+1 if rkt_days_count > 1 else ''}"
+                })
+        else:
+            # Fetch plan topics for Knowledge Acquisition
+            topics_query = "SELECT day_label, topic_name FROM plan_topics WHERE plan_id = %s ORDER BY id ASC"
+            topics_result = execute_query(topics_query, (data['plan_id'],))
             
-        from collections import defaultdict
-        days_dict = defaultdict(list)
-        for row in topics_result:
-            days_dict[row['day_label']].append(row['topic_name'])
-            
-        topics_lines = []
-        for day, topics in days_dict.items():
-            topics_lines.append(f"{day}:")
-            for t in topics:
-                topics_lines.append(f"- {t}")
-            topics_lines.append("")
-        topics_summary = "\n".join(topics_lines)
-        from llm_service import call_llm, load_prompt
-        prompt = load_prompt("scheduling_meeting_generation.txt", topics_summary=topics_summary)
-        import json
-        llm_response = call_llm(prompt)
-        try:
-            if llm_response.startswith('```json'):
-                llm_response = llm_response[7:-3]
-            elif llm_response.startswith('```'):
-                llm_response = llm_response[3:-3]
-            day_details = json.loads(llm_response.strip())
-        except Exception as parse_err:
-            print(f"Error parsing LLM JSON: {parse_err}. Response: {llm_response}")
-            return jsonify({"success": False, "message": "Failed to generate meeting schedule. Try again."}), 500
+            if not topics_result:
+                return jsonify({"success": False, "message": "No topics found for this plan"}), 404
+                
+            from collections import defaultdict
+            days_dict = defaultdict(list)
+            for row in topics_result:
+                days_dict[row['day_label']].append(row['topic_name'])
+                
+            topics_lines = []
+            for day, topics in days_dict.items():
+                topics_lines.append(f"{day}:")
+                for t in topics:
+                    topics_lines.append(f"- {t}")
+                topics_lines.append("")
+            topics_summary = "\n".join(topics_lines)
+            from llm_service import call_llm, load_prompt
+            prompt = load_prompt("scheduling_meeting_generation.txt", topics_summary=topics_summary)
+            import json
+            llm_response = call_llm(prompt)
+            try:
+                if llm_response.startswith('```json'):
+                    llm_response = llm_response[7:-3]
+                elif llm_response.startswith('```'):
+                    llm_response = llm_response[3:-3]
+                day_details = json.loads(llm_response.strip())
+            except Exception as parse_err:
+                print(f"Error parsing LLM JSON: {parse_err}. Response: {llm_response}")
+                return jsonify({"success": False, "message": "Failed to generate meeting schedule. Try again."}), 500
 
         from datetime import datetime, timedelta
         import random
@@ -144,6 +190,7 @@ def create_meeting():
             holiday_dates = set()
 
         meeting_ids = []
+        shared_teams_link = None
         for idx, details in enumerate(day_details):
             # Parse LLM-chosen start_time (HH:MM); fall back to a random time if invalid
             raw_time = details.get('start_time', '')
@@ -243,17 +290,45 @@ def create_meeting():
             current_dt = current_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
             formatted_date = current_dt.strftime('%Y-%m-%d %H:%M:%S')
             
+            # Determine MS Teams Meeting Link based on meeting_link_option
+            day_label_key = f"Day {idx + 1}"
+            if meeting_link_option == "Single Link for All Days":
+                if not shared_teams_link:
+                    shared_teams_link = provided_link if provided_link else generate_teams_meeting_link()
+                final_meeting_link = shared_teams_link
+            else:
+                # "Different Link for Each Day"
+                day_link = ""
+                if isinstance(daily_meeting_links, dict):
+                    for k in [day_label_key, f"Reverse KT - Day {idx + 1}", str(idx + 1), str(idx), idx]:
+                        if k in daily_meeting_links and str(daily_meeting_links[k]).strip():
+                            day_link = str(daily_meeting_links[k]).strip()
+                            break
+                    if not day_link:
+                        dict_vals = list(daily_meeting_links.values())
+                        if idx < len(dict_vals) and str(dict_vals[idx]).strip():
+                            day_link = str(dict_vals[idx]).strip()
+                elif isinstance(daily_meeting_links, list) and idx < len(daily_meeting_links):
+                    day_link = str(daily_meeting_links[idx] or '').strip()
+
+                if day_link:
+                    final_meeting_link = day_link
+                else:
+                    final_meeting_link = generate_teams_meeting_link()
+
+            meeting_title = data.get('title') or details.get('title', f'Meeting Day {idx+1}')
+
             query = """
                 INSERT INTO meetings (plan_id, title, scheduled_at, organizer_id, description, meeting_link)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """
             params = (
                 data['plan_id'], 
-                details.get('title', f'Meeting Day {idx+1}'), 
+                meeting_title, 
                 formatted_date, 
                 organizer_id,
                 details.get('description', ''),
-                data.get('meeting_link') or data.get('link')
+                final_meeting_link
             )
             meeting_id = execute_write(query, params)
             meeting_ids.append(meeting_id)
@@ -340,8 +415,9 @@ def create_meeting():
             except Exception as mapping_err:
                 print(f"Error updating resource_mapping: {mapping_err}")
 
-            if sud_recipients or shadow_mappings or lead_recipients or final_assessment_recipients:
-                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, shadow_mappings, lead_recipients, final_assessment_recipients)
+            # Only SUD requirement email should go on scheduling if SUD exists
+            if sud_recipients:
+                trigger_plan_requirements_notification(data['plan_id'], sud_recipients, [], [], None)
         except Exception as notify_req_err:
             print(f"Error triggering requirements notification: {notify_req_err}")
 
@@ -364,12 +440,13 @@ def notify_requirements():
 
         shadow_mappings = data.get('shadow_mappings', [])
         lead_recipients = data.get('lead_recipients', [])
+        reverse_kt_recipients = data.get('reverse_kt_recipients', [])
 
         shadow_recipients = []
         for mapping in shadow_mappings:
             shadow_recipients.extend(mapping.get('participantIds', []))
 
-        if not shadow_recipients and not lead_recipients:
+        if not shadow_recipients and not lead_recipients and not reverse_kt_recipients:
             return jsonify({"success": False, "message": "No recipients provided"}), 400
 
         try:
@@ -405,7 +482,7 @@ def notify_requirements():
 
         try:
             from services.notification_service import trigger_plan_requirements_notification
-            trigger_plan_requirements_notification(plan_id, [], shadow_mappings, lead_recipients, [])
+            trigger_plan_requirements_notification(plan_id, [], shadow_mappings, lead_recipients, [], reverse_kt_recipients)
         except Exception as notify_req_err:
             print(f"Error triggering requirements notification: {notify_req_err}")
 
@@ -481,70 +558,95 @@ def get_meetings():
 
         base_query += " ORDER BY m.scheduled_at ASC"
         meetings = execute_query(base_query, tuple(params))
-        from services.tracking_service import get_meeting_attendance_rate
-        
+        if not meetings:
+            return jsonify({"success": True, "data": []}), 200
+
+        m_ids = [m['id'] for m in meetings]
+        format_strings = ','.join(['%s'] * len(m_ids))
+
+        # 1. Bulk attendance rates
+        att_rate_map = {}
+        try:
+            att_query = f"""
+                SELECT meeting_id, COUNT(*) as total, SUM(CASE WHEN attended = 1 THEN 1 ELSE 0 END) as attended
+                FROM attendance
+                WHERE meeting_id IN ({format_strings})
+                GROUP BY meeting_id
+            """
+            att_rows = execute_query(att_query, tuple(m_ids))
+            for ar in att_rows:
+                tot = int(ar['total'] or 0)
+                atd = int(ar['attended'] or 0)
+                att_rate_map[ar['meeting_id']] = round((atd / tot * 100), 2) if tot > 0 else 0.0
+        except Exception as e:
+            print(f"Error bulk fetching attendance: {e}")
+
+        # 2. Bulk attendance stakeholder IDs
+        m_sh_map = {}
+        try:
+            sh_query = f"SELECT meeting_id, stakeholder_id FROM attendance WHERE meeting_id IN ({format_strings})"
+            sh_rows = execute_query(sh_query, tuple(m_ids))
+            for sr in sh_rows:
+                mid = sr['meeting_id']
+                if mid not in m_sh_map:
+                    m_sh_map[mid] = []
+                m_sh_map[mid].append(sr['stakeholder_id'])
+        except Exception as e:
+            print(f"Error bulk fetching stakeholder IDs: {e}")
+
+        # 3. Bulk knowledge givers per meeting
+        m_kg_map = {}
+        try:
+            kg_query = f"""
+                SELECT DISTINCT a.meeting_id, s.name
+                FROM stakeholders s
+                JOIN attendance a ON s.id = a.stakeholder_id
+                WHERE a.meeting_id IN ({format_strings})
+                  AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
+            """
+            kg_rows = execute_query(kg_query, tuple(m_ids) + ('%outgoing%', '%Giver%'))
+            for kr in kg_rows:
+                mid = kr['meeting_id']
+                if mid not in m_kg_map:
+                    m_kg_map[mid] = []
+                m_kg_map[mid].append(kr['name'])
+        except Exception as e:
+            print(f"Error bulk fetching knowledge givers: {e}")
+
+        global_kg = []
+        try:
+            global_kg_res = execute_query("SELECT name FROM stakeholders WHERE role = 'Outgoing SME (Knowledge Giver)' OR role = 'outgoing_sme' OR role LIKE %s OR role LIKE %s LIMIT 1", ('%outgoing%', '%Giver%'))
+            global_kg = [r['name'] for r in global_kg_res] if global_kg_res else []
+        except Exception:
+            pass
+
         plan_day_counters = {}
-        plan_kg_cache = {}
         for m in meetings:
-            m['attendance_rate_percent'] = get_meeting_attendance_rate(m['id'])
+            mid = m['id']
             pid = m['plan_id']
+            m['attendance_rate_percent'] = att_rate_map.get(mid, 0.0)
             if pid not in plan_day_counters:
                 plan_day_counters[pid] = 1
             m['day_label'] = f"Day {plan_day_counters[pid]}"
             plan_day_counters[pid] += 1
-            
-            try:
-                kg_query = """
-                    SELECT DISTINCT s.name
-                    FROM stakeholders s
-                    JOIN attendance a ON s.id = a.stakeholder_id
-                    WHERE a.meeting_id = %s 
-                      AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
-                """
-                kg_res = execute_query(kg_query, (m['id'], '%outgoing%', '%Giver%'))
-                giver_names = [r['name'] for r in kg_res] if kg_res else []
-                
-                if not giver_names:
-                    if pid not in plan_kg_cache:
-                        plan_kg_query = """
-                            SELECT DISTINCT s.name
-                            FROM stakeholders s
-                            JOIN attendance a ON s.id = a.stakeholder_id
-                            JOIN meetings m2 ON a.meeting_id = m2.id
-                            WHERE m2.plan_id = %s 
-                              AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
-                        """
-                        plan_kg_res = execute_query(plan_kg_query, (pid, '%outgoing%', '%Giver%'))
-                        plan_kg_cache[pid] = [r['name'] for r in plan_kg_res] if plan_kg_res else []
-                    giver_names = plan_kg_cache[pid]
-                    
-                if not giver_names:
-                    global_kg = execute_query("SELECT name FROM stakeholders WHERE role = 'Outgoing SME (Knowledge Giver)' OR role = 'outgoing_sme' OR role LIKE %s OR role LIKE %s LIMIT 1", ('%outgoing%', '%Giver%'))
-                    giver_names = [r['name'] for r in global_kg] if global_kg else []
-                    
-                seen = set()
-                unique_giver_names = []
-                for name in giver_names:
-                    if name not in seen:
-                        seen.add(name)
-                        unique_giver_names.append(name)
-                m['knowledge_giver_names'] = ", ".join(unique_giver_names) if unique_giver_names else "N/A"
-                m['knowledge_givers'] = unique_giver_names
-            except Exception as kg_err:
-                print(f"Error fetching knowledge givers for meeting {m['id']}: {kg_err}")
-                m['knowledge_giver_names'] = "N/A"
-                m['knowledge_givers'] = []
-            
-            try:
-                sh_query = "SELECT stakeholder_id FROM attendance WHERE meeting_id = %s"
-                sh_res = execute_query(sh_query, (m['id'],))
-                sh_ids = [r['stakeholder_id'] for r in sh_res] if sh_res else []
-                if m.get('organizer_id') and m['organizer_id'] not in sh_ids:
-                    sh_ids.append(m['organizer_id'])
-                m['all_stakeholder_ids'] = sh_ids
-            except Exception as err:
-                print(f"Error fetching all stakeholders for meeting {m['id']}: {err}")
-                m['all_stakeholder_ids'] = []
+
+            giver_names = m_kg_map.get(mid, [])
+            if not giver_names:
+                giver_names = global_kg
+
+            seen = set()
+            unique_giver_names = []
+            for name in giver_names:
+                if name not in seen:
+                    seen.add(name)
+                    unique_giver_names.append(name)
+            m['knowledge_giver_names'] = ", ".join(unique_giver_names) if unique_giver_names else "N/A"
+            m['knowledge_givers'] = unique_giver_names
+
+            sh_ids = list(m_sh_map.get(mid, []))
+            if m.get('organizer_id') and m['organizer_id'] not in sh_ids:
+                sh_ids.append(m['organizer_id'])
+            m['all_stakeholder_ids'] = sh_ids
             
         return jsonify({"success": True, "data": meetings}), 200
     except Exception as e:
@@ -1558,7 +1660,9 @@ def bulk_upload():
                     execute_write(mapping_query, (project_id, plan_id, sh_id, is_sudo, is_final_assessment))
                 
                 try:
-                    trigger_plan_requirements_notification(plan_id, sud_recipients, [], [], final_assessment_recipients)
+                    # Only send SUD requirement email if SUD exists, NO final assessment mail on schedule
+                    if sud_recipients:
+                        trigger_plan_requirements_notification(plan_id, sud_recipients, [], [], None)
                 except Exception as notify_req_err:
                     print(f"Error triggering requirements notification in bulk upload: {notify_req_err}")
 
