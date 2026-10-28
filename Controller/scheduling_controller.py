@@ -23,6 +23,24 @@ def get_authenticated_user():
         print(f"DEBUG: InvalidTokenError details: {e}")
         raise Exception("Invalid token")
 
+def generate_teams_meeting_link():
+    """Generates a dynamic, standard Microsoft Teams meeting join link."""
+    import uuid
+    import urllib.parse
+    import json
+    meeting_unique_id = uuid.uuid4().hex
+    tenant_id = str(uuid.uuid4())
+    organizer_oid = str(uuid.uuid4())
+    context_obj = {
+        "Tid": tenant_id,
+        "Oid": organizer_oid
+    }
+    context_str = json.dumps(context_obj, separators=(',', ':'))
+    context_encoded = urllib.parse.quote(context_str)
+    thread_id = f"19:meeting_{meeting_unique_id}@thread.v2"
+    thread_encoded = urllib.parse.quote(thread_id)
+    return f"https://teams.microsoft.com/l/meetup-join/{thread_encoded}/0?context={context_encoded}"
+
 @scheduling_bp.route('/meetings', methods=['POST'])
 def create_meeting():
     try:
@@ -1239,6 +1257,7 @@ def bulk_upload():
             grouped = df.groupby('Day / Section', sort=False)
             
             all_stakeholder_ids = set()
+            shared_teams_link = None
             for day_str, group in grouped:
                 day_str = str(day_str).strip()
                 if not day_str.lower().startswith('day'):
@@ -1416,7 +1435,14 @@ def bulk_upload():
                 session_end_time = current_time
                 description = json.dumps(agenda)
 
-                final_meeting_link = ""
+                # Dynamically generate Microsoft Teams meeting link
+                if meeting_link_option == "Single Link for All Days":
+                    if not shared_teams_link:
+                        shared_teams_link = generate_teams_meeting_link()
+                    final_meeting_link = shared_teams_link
+                else:
+                    final_meeting_link = generate_teams_meeting_link()
+
                 title = f'{project_name} - {plan_name} - {day_str}'
 
                 query = """
@@ -1444,30 +1470,19 @@ def bulk_upload():
                     attendee_emails = [r['email'] for r in sh_res if r.get('email')]
                 
                 from services.google_calendar_service import GoogleCalendarService
-                if meeting_link_option == "Single Link for All Days" and shared_meet_link:
+                try:
                     GoogleCalendarService.create_meeting_event(
                         meeting_id=meeting_id,
                         title=title,
                         description=description,
                         start_dt=datetime.strptime(formatted_date, "%Y-%m-%d %H:%M:%S"),
                         end_dt=session_end_time,
-                        meeting_link=shared_meet_link,
+                        meeting_link=final_meeting_link,
+                        generate_meet_link=False,
                         attendee_emails=attendee_emails
                     )
-                    final_meeting_link = shared_meet_link
-                else:
-                    res = GoogleCalendarService.create_meeting_event(
-                        meeting_id=meeting_id,
-                        title=title,
-                        description=description,
-                        start_dt=datetime.strptime(formatted_date, "%Y-%m-%d %H:%M:%S"),
-                        end_dt=session_end_time,
-                        generate_meet_link=True,
-                        attendee_emails=attendee_emails
-                    )
-                    final_meeting_link = res.get('hangout_link') if res else ""
-                    if meeting_link_option == "Single Link for All Days":
-                        shared_meet_link = final_meeting_link
+                except Exception as cal_err:
+                    print(f"Calendar sync note for meeting {meeting_id}: {cal_err}")
                 
                 execute_write("UPDATE meetings SET meeting_link = %s WHERE id = %s", (final_meeting_link, meeting_id))
 

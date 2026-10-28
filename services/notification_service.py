@@ -172,13 +172,14 @@ def _send_meeting_notification_async(meeting_id, is_overdue=False, skip_calendar
                 if not is_overdue:
                     subject = f"KT Schedule: {meeting['title']} Agenda & Meeting Details"
                     
+                platform_label = "Microsoft Teams meeting" if (meeting.get('meeting_link') and 'teams' in meeting.get('meeting_link').lower()) else ("Google Meet" if (meeting.get('meeting_link') and 'meet.google' in meeting.get('meeting_link').lower()) else "meeting")
                 description_row = f"""
               <tr>
                 <td colspan="2">
                   <div style="font-weight: bold; margin-bottom: 5px; color: #111827; font-size: 15px;">Session Window: {session_window}</div>
                   {agenda_html}
                   <div style="margin-top: 15px; font-style: italic; color: #4b5563; font-size: 13px;">
-                    Note: Please join the common Google Meet link at your respective topic time slots.
+                    Note: Please join the {platform_label} link at your respective topic time slots.
                   </div>
                 </td>
               </tr>
