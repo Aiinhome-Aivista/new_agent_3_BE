@@ -424,24 +424,43 @@ def upload_stakeholders():
 
     
     try:
-        from utils.s3_utils import upload_to_s3, log_s3_upload
+        from azure.identity import DefaultAzureCredential
+        from azure.storage.blob import BlobServiceClient
         import uuid
         import os
-        bucket_name = os.getenv("AWS_S3_BUCKET_NAME", "agent-initiative-bucket")
-        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
-        agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+
+        account_name = os.getenv("AZURE_STORAGE_ACCOUNT", "ipmi52ydsa0001").strip()
+        container_name = os.getenv("AZURE_CONTAINER_NAME", "agent-11").strip()
 
         original_name = os.path.basename(file.filename)
         extracted_name = os.path.splitext(original_name)[0]
         ext = os.path.splitext(original_name)[1].lower()
         safe_filename = f"stakeholder_upload_{uuid.uuid4().hex[:8]}_{original_name}"
         
-        s3_base_path = f"{base_folder}/{agent_folder}/{extracted_name}"
-        s3_key = f"{s3_base_path}/Stakeholders/{safe_filename}"
-        
-        success, msg = upload_to_s3(file.stream, bucket_name, s3_key)
-        if success:
-            log_s3_upload(original_name, ext, s3_key, 'System', 'Stakeholder Bulk Upload')
+        base_folder = os.getenv("AWS_S3_BASE_FOLDER", "Agents_Doc")
+        agent_folder = os.getenv("AWS_S3_AGENT_FOLDER", "Agent_13")
+        blob_path = f"{base_folder}/{agent_folder}/{extracted_name}/Stakeholders/{safe_filename}"
+
+        try:
+            credential = DefaultAzureCredential()
+            blob_service_client = BlobServiceClient(
+                account_url=f"https://{account_name}.blob.core.windows.net",
+                credential=credential
+            )
+            blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_path)
+            
+            file_content = file.stream.read()
+            file.stream.seek(0)
+            blob_client.upload_blob(file_content, overwrite=True)
+            logger.info(f"Successfully uploaded {blob_path} to Azure Blob container {container_name} via DefaultAzureCredential")
+            
+            try:
+                from utils.azure_utils import log_azure_upload
+                log_azure_upload(original_name, ext, account_name, container_name, blob_path, 'System', 'Stakeholder Bulk Upload')
+            except Exception as log_err:
+                logger.warning(f"Could not log upload to azure_blob_uploads: {log_err}")
+        except Exception as azure_err:
+            logger.error(f"Azure Blob upload error: {azure_err}", exc_info=True)
         
         file.stream.seek(0)
         

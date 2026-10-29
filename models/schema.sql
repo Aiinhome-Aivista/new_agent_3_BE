@@ -161,3 +161,15 @@ CREATE TABLE IF NOT EXISTS holidays (
     holiday_year INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS azure_blob_uploads (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    file_name VARCHAR(255) NOT NULL,
+    original_format VARCHAR(50),
+    account_name VARCHAR(255) NOT NULL,
+    container_name VARCHAR(255) NOT NULL,
+    blob_path VARCHAR(500) NOT NULL,
+    uploaded_by VARCHAR(100) DEFAULT 'System',
+    module_type VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

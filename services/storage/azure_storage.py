@@ -1,53 +1,149 @@
-from config import Config
-from .base import BaseStorageProvider
+import os
 import logging
+
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+
+from .base import BaseStorageProvider
 
 logger = logging.getLogger(__name__)
 
-class AzureStorageProvider(BaseStorageProvider):
-    def __init__(self):
-        self.connection_string = Config.AZURE_STORAGE_CONNECTION_STRING
-        self.container_name = Config.AZURE_CONTAINER_NAME
 
-    def save_file(self, file_name, file_stream, project_id=None, project_name=None):
-        if not self.connection_string or not self.container_name:
-            logger.error("Azure Storage credentials missing: set AZURE_STORAGE_CONNECTION_STRING and AZURE_CONTAINER_NAME.")
+class AzureStorageProvider(BaseStorageProvider):
+    """Azure Blob Storage provider using DefaultAzureCredential."""
+
+    def __init__(self):
+        self.blob_service_client = None
+        self.container_name = os.getenv("AZURE_CONTAINER_NAME")
+        self.credential = None
+
+        try:
+            account_name = os.getenv("AZURE_STORAGE_ACCOUNT")
+
+            if not account_name:
+                raise ValueError(
+                    "AZURE_STORAGE_ACCOUNT environment variable is required."
+                )
+
+            if not self.container_name:
+                raise ValueError(
+                    "AZURE_CONTAINER_NAME environment variable is required."
+                )
+
+            # Authenticate using Managed Identity or another supported
+            # credential configured through DefaultAzureCredential.
+            self.credential = DefaultAzureCredential()
+
+            self.blob_service_client = BlobServiceClient(
+                account_url=(
+                    f"https://{account_name}.blob.core.windows.net"
+                ),
+                credential=self.credential,
+            )
+
+            logger.info(
+                "Azure Blob Storage initialized successfully using "
+                "DefaultAzureCredential."
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Azure Blob Storage initialization failed: %s", e
+            )
+
+    def save_file(
+        self,
+        file_name,
+        file_stream,
+        project_id=None,
+        project_name=None,
+    ):
+        """Upload a file to Azure Blob Storage.
+
+        Files are stored under the project name when provided.
+        Otherwise, the project ID is used as the folder name.
+
+        Returns:
+            str: Uploaded blob name on success.
+            None: If the upload fails.
+        """
+
+        if not self.blob_service_client:
+            logger.error(
+                "Azure Blob client is not initialized."
+            )
+            return None
+
+        if not self.container_name:
+            logger.error(
+                "Azure container name is not configured."
+            )
             return None
 
         try:
-            from azure.storage.blob import BlobServiceClient
+            # Build the blob path.
+            folder_name = None
 
-            # Build Blob path
-            folder_parts = []
             if project_name:
-                folder_parts.append(str(project_name))
+                folder_name = str(project_name)
             elif project_id:
-                folder_parts.append(str(project_id))
-                
-            folder_path = "/".join(filter(None, folder_parts))
-            blob_name = f"{folder_path}/{file_name}" if folder_path else file_name
+                folder_name = str(project_id)
 
-            blob_service_client = BlobServiceClient.from_connection_string(self.connection_string)
-            container_client = blob_service_client.get_container_client(self.container_name)
+            blob_name = (
+                f"{folder_name}/{file_name}"
+                if folder_name
+                else str(file_name)
+            )
 
-            # Create container if it does not exist
-            try:
-                if not container_client.exists():
-                    container_client.create_container()
-            except Exception as ce:
-                logger.warning(f"Could not verify or auto-create container {self.container_name}: {ce}")
+            # Get the blob client.
+            blob_client = self.blob_service_client.get_blob_client(
+                container=self.container_name,
+                blob=blob_name,
+            )
 
-            blob_client = container_client.get_blob_client(blob=blob_name)
-
+            # Support both bytes and file-like objects.
             if isinstance(file_stream, bytes):
-                blob_client.upload_blob(file_stream, overwrite=True)
+                file_content = file_stream
             else:
-                file_content = file_stream.read()
-                file_stream.seek(0)
-                blob_client.upload_blob(file_content, overwrite=True)
+                if hasattr(file_stream, "seek"):
+                    file_stream.seek(0)
 
-            logger.info(f"Successfully uploaded {file_name} to Azure Blob Storage as {blob_name}")
+                file_content = file_stream
+
+            # Upload the file, replacing an existing blob if necessary.
+            blob_client.upload_blob(
+                file_content,
+                overwrite=True,
+            )
+
+            logger.info(
+                "Successfully uploaded %s to Azure Blob Storage as %s/%s",
+                file_name,
+                self.container_name,
+                blob_name,
+            )
+
             return blob_name
+
         except Exception as e:
-            logger.error(f"Failed to upload to Azure Blob Storage: {e}")
+            logger.exception(
+                "Failed to upload %s to Azure Blob Storage: %s",
+                file_name,
+                e,
+            )
             return None
+
+    def close(self):
+        """Close Azure clients and release credential resources."""
+
+        try:
+            if self.blob_service_client:
+                self.blob_service_client.close()
+
+            if self.credential:
+                self.credential.close()
+
+        except Exception as e:
+            logger.warning(
+                "Error while closing Azure Storage resources: %s", e
+            )

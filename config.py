@@ -51,8 +51,9 @@ class Config:
     AWS_S3_AGENT_FOLDER = os.getenv("AWS_S3_AGENT_FOLDER")
 
     # Azure Storage
+    AZURE_STORAGE_ACCOUNT = os.getenv("AZURE_STORAGE_ACCOUNT", "ipmi52ydsa0001")
+    AZURE_CONTAINER_NAME = os.getenv("AZURE_CONTAINER_NAME", "agent-11")
     AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    AZURE_CONTAINER_NAME = os.getenv("AZURE_CONTAINER_NAME")
 
     # Local Storage
     UPLOAD_PATH = os.getenv("UPLOAD_PATH", "data/uploads")
