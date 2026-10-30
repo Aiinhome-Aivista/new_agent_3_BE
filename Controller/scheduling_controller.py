@@ -594,24 +594,41 @@ def get_meetings():
         except Exception as e:
             print(f"Error bulk fetching stakeholder IDs: {e}")
 
-        # 3. Bulk knowledge givers per meeting
-        m_kg_map = {}
+        # 3. Bulk participants (knowledge givers & receivers) per meeting
+        m_kg_names_map = {}
+        m_kg_ids_map = {}
+        m_kr_names_map = {}
+        m_kr_ids_map = {}
         try:
-            kg_query = f"""
-                SELECT DISTINCT a.meeting_id, s.name
+            part_query = f"""
+                SELECT a.meeting_id, s.id as stakeholder_id, s.name, s.role
                 FROM stakeholders s
                 JOIN attendance a ON s.id = a.stakeholder_id
                 WHERE a.meeting_id IN ({format_strings})
-                  AND (s.role = 'Outgoing SME (Knowledge Giver)' OR s.role = 'outgoing_sme' OR s.role LIKE %s OR s.role LIKE %s)
             """
-            kg_rows = execute_query(kg_query, tuple(m_ids) + ('%outgoing%', '%Giver%'))
-            for kr in kg_rows:
-                mid = kr['meeting_id']
-                if mid not in m_kg_map:
-                    m_kg_map[mid] = []
-                m_kg_map[mid].append(kr['name'])
+            part_rows = execute_query(part_query, tuple(m_ids))
+            for pr in part_rows:
+                mid = pr['meeting_id']
+                sid = pr['stakeholder_id']
+                sname = pr['name']
+                srole = (pr.get('role') or '').lower()
+
+                if 'giver' in srole or 'outgoing' in srole or srole == 'outgoing_sme':
+                    if mid not in m_kg_ids_map:
+                        m_kg_ids_map[mid] = []
+                        m_kg_names_map[mid] = []
+                    if sid not in m_kg_ids_map[mid]:
+                        m_kg_ids_map[mid].append(sid)
+                        m_kg_names_map[mid].append(sname)
+                elif 'receiver' in srole or 'incoming' in srole or srole == 'incoming_member':
+                    if mid not in m_kr_ids_map:
+                        m_kr_ids_map[mid] = []
+                        m_kr_names_map[mid] = []
+                    if sid not in m_kr_ids_map[mid]:
+                        m_kr_ids_map[mid].append(sid)
+                        m_kr_names_map[mid].append(sname)
         except Exception as e:
-            print(f"Error bulk fetching knowledge givers: {e}")
+            print(f"Error bulk fetching participants: {e}")
 
         global_kg = []
         try:
@@ -630,18 +647,22 @@ def get_meetings():
             m['day_label'] = f"Day {plan_day_counters[pid]}"
             plan_day_counters[pid] += 1
 
-            giver_names = m_kg_map.get(mid, [])
-            if not giver_names:
+            # Knowledge Givers
+            giver_names = m_kg_names_map.get(mid, [])
+            giver_ids = m_kg_ids_map.get(mid, [])
+            if not giver_names and global_kg:
                 giver_names = global_kg
 
-            seen = set()
-            unique_giver_names = []
-            for name in giver_names:
-                if name not in seen:
-                    seen.add(name)
-                    unique_giver_names.append(name)
-            m['knowledge_giver_names'] = ", ".join(unique_giver_names) if unique_giver_names else "N/A"
-            m['knowledge_givers'] = unique_giver_names
+            m['knowledge_giver_ids'] = giver_ids
+            m['knowledge_givers'] = giver_names
+            m['knowledge_giver_names'] = ", ".join(giver_names) if giver_names else "N/A"
+
+            # Knowledge Receivers
+            receiver_names = m_kr_names_map.get(mid, [])
+            receiver_ids = m_kr_ids_map.get(mid, [])
+            m['knowledge_receiver_ids'] = receiver_ids
+            m['knowledge_receivers'] = receiver_names
+            m['knowledge_receiver_names'] = ", ".join(receiver_names) if receiver_names else "N/A"
 
             sh_ids = list(m_sh_map.get(mid, []))
             if m.get('organizer_id') and m['organizer_id'] not in sh_ids:
@@ -752,6 +773,19 @@ def reschedule_meeting(id):
     new_time = data.get('new_time')  # Expected format: "HH:MM"
     new_date = data.get('new_date')  # Expected format: "YYYY-MM-DD"
     reason = data.get('reason', '')
+    giver_ids = data.get('giver_ids')
+    receiver_ids = data.get('receiver_ids')
+    stakeholder_ids = data.get('stakeholder_ids')
+
+    updated_stakeholder_ids = None
+    if giver_ids is not None or receiver_ids is not None or stakeholder_ids is not None:
+        updated_stakeholder_ids = set()
+        if giver_ids is not None:
+            updated_stakeholder_ids.update([int(x) for x in giver_ids if str(x).isdigit()])
+        if receiver_ids is not None:
+            updated_stakeholder_ids.update([int(x) for x in receiver_ids if str(x).isdigit()])
+        if stakeholder_ids is not None:
+            updated_stakeholder_ids.update([int(x) for x in stakeholder_ids if str(x).isdigit()])
 
     if not new_time:
         return jsonify({"success": False, "message": "new_time is required (format HH:MM)"}), 400
@@ -886,8 +920,11 @@ def reschedule_meeting(id):
                 proposed_meetings.append((sub_m['id'], sub_new_dt))
 
         # Check for overlaps
-        att_rows = execute_query("SELECT stakeholder_id FROM attendance WHERE meeting_id = %s", (id,))
-        stakeholders = [r['stakeholder_id'] for r in att_rows]
+        if updated_stakeholder_ids is not None:
+            stakeholders = list(updated_stakeholder_ids)
+        else:
+            att_rows = execute_query("SELECT stakeholder_id FROM attendance WHERE meeting_id = %s", (id,))
+            stakeholders = [r['stakeholder_id'] for r in att_rows]
         
         final_proposed_meetings = []
         time_was_adjusted = False
@@ -1009,6 +1046,29 @@ def reschedule_meeting(id):
                 "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
                 (prop_dt.strftime('%Y-%m-%d %H:%M:%S'), m_id)
             )
+
+        # Sync attendance if participants were changed
+        if updated_stakeholder_ids is not None:
+            try:
+                current_att_rows = execute_query("SELECT stakeholder_id FROM attendance WHERE meeting_id = %s", (id,))
+                current_sh_ids = set(r['stakeholder_id'] for r in current_att_rows)
+
+                to_delete = current_sh_ids - updated_stakeholder_ids
+                if to_delete:
+                    del_fmt = ','.join(['%s'] * len(to_delete))
+                    execute_write(
+                        f"DELETE FROM attendance WHERE meeting_id = %s AND stakeholder_id IN ({del_fmt})",
+                        tuple([id] + list(to_delete))
+                    )
+
+                to_add = updated_stakeholder_ids - current_sh_ids
+                for sid in to_add:
+                    execute_write(
+                        "INSERT INTO attendance (meeting_id, stakeholder_id) VALUES (%s, %s)",
+                        (id, sid)
+                    )
+            except Exception as att_err:
+                print(f"Error updating meeting attendance during reschedule: {att_err}")
 
         if reschedule_subsequent:
             try:

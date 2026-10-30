@@ -471,8 +471,16 @@ def _send_reschedule_notification_async(meeting_id, new_scheduled_dt, reason="")
         """
         participants = execute_query(participants_query, (meeting_id,))
 
-        knowledge_givers = [p for p in participants if p.get('role') in ('outgoing_sme', 'Outgoing SME (Knowledge Giver)')]
-        knowledge_receivers = [p for p in participants if p.get('role') in ('incoming_member', 'Incoming Team Member (Knowledge Receiver)')]
+        def _is_giver(p):
+            r = (p.get('role') or '').lower()
+            return 'giver' in r or 'outgoing' in r or r == 'outgoing_sme'
+
+        def _is_receiver(p):
+            r = (p.get('role') or '').lower()
+            return 'receiver' in r or 'incoming' in r or r == 'incoming_member'
+
+        knowledge_givers = [p for p in participants if _is_giver(p)]
+        knowledge_receivers = [p for p in participants if _is_receiver(p)]
 
         recipients = {}
         for p in participants:
