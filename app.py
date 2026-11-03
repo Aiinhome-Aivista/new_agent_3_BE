@@ -24,29 +24,10 @@ from Controller.chatbot3_controller import chatbot3_bp
 from Controller.projects_controller import projects_bp
 from Controller.sud_controller import sud_bp
 from Controller.jira_controller import jira_bp
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
-    
-    # Run Database Seeder (Commented out as initial test users are already seeded)
-    # from db_seeder import seed_users
-    # seed_users()
-
-    # Configure OpenTelemetry (Disabled to avoid connection refused errors)
-    # resource = Resource.create({SERVICE_NAME: "kt-manager-backend"})
-    # provider = TracerProvider(resource=resource)
-    # exporter = OTLPSpanExporter(endpoint="http://localhost:4317", insecure=True)
-    # provider.add_span_processor(BatchSpanProcessor(exporter))
-    # trace.set_tracer_provider(provider)
-    
-    # FlaskInstrumentor().instrument_app(app)
     
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -74,6 +55,13 @@ def create_app():
     app.register_blueprint(sud_bp, url_prefix="/api/sud")
     app.register_blueprint(jira_bp, url_prefix="/api/jira")
     
+    # Start Autonomous Meeting Scheduler Service
+    try:
+        from services.bot.scheduler_service import MeetingSchedulerService
+        MeetingSchedulerService.start_scheduler()
+    except Exception as sched_err:
+        logging.getLogger("app").warning(f"Could not start MeetingSchedulerService: {sched_err}")
+
     @app.route("/api/health")
     def health():
         return jsonify({"success": True, "message": "KT Manager API is running"})

@@ -70,6 +70,12 @@ def _send_meeting_notification_async(meeting_id, is_overdue=False, skip_calendar
         if Config.ALWAYS_NOTIFY_ORGANIZER and organizer_email:
             recipients[organizer_email] = organizer_name
 
+        # Add Meet Agent Bot Email if configured
+        bot_email = getattr(Config, 'MEET_AGENT_BOT_EMAIL', None)
+        bot_name = getattr(Config, 'BOT_NAME', 'AI Meeting Facilitator')
+        if bot_email and bot_email.strip():
+            recipients[bot_email.strip()] = bot_name
+
         # If no participants are selected (and organizer is not notified/exists), do not send any emails
         if not recipients:
             logger.warning("No meeting participants found. Email notification skipped.")
@@ -222,6 +228,8 @@ def _send_meeting_notification_async(meeting_id, is_overdue=False, skip_calendar
         for p in participants:
             if p.get('email'):
                 attendees_ics += f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={p.get('name')}:mailto:{p['email']}\n"
+        if bot_email and bot_email.strip():
+            attendees_ics += f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={bot_name}:mailto:{bot_email.strip()}\n"
         
         ics_content = f"""BEGIN:VCALENDAR
 VERSION:2.0
@@ -490,6 +498,11 @@ def _send_reschedule_notification_async(meeting_id, new_scheduled_dt, reason="")
         if Config.ALWAYS_NOTIFY_ORGANIZER and organizer_email:
             recipients[organizer_email] = organizer_name
 
+        bot_email = getattr(Config, 'MEET_AGENT_BOT_EMAIL', None)
+        bot_name = getattr(Config, 'BOT_NAME', 'AI Meeting Facilitator')
+        if bot_email and bot_email.strip():
+            recipients[bot_email.strip()] = bot_name
+
         if not recipients:
             logger.warning(f"No participants found for reschedule notification on meeting {meeting_id}. Skipped.")
             return
@@ -523,6 +536,8 @@ def _send_reschedule_notification_async(meeting_id, new_scheduled_dt, reason="")
         for p in participants:
             if p.get('email'):
                 attendees_ics += f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={p.get('name')}:mailto:{p['email']}\n"
+        if bot_email and bot_email.strip():
+            attendees_ics += f"ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={bot_name}:mailto:{bot_email.strip()}\n"
 
         ics_content = f"""BEGIN:VCALENDAR
 VERSION:2.0

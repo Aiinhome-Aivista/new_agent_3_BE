@@ -12,3 +12,4 @@ reports_output/
 token.json
 credentials.json
 .env
+teams_bot_profile/

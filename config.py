@@ -89,3 +89,12 @@ class Config:
 
     # Jira Configuration
     JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "")
+
+    # Meet Agent Bot Configuration
+    BOT_NAME = os.getenv("BOT_NAME", "AI Meeting Facilitator")
+    MEET_AGENT_BOT_EMAIL = os.getenv("MEET_AGENT_BOT_EMAIL", "meetagent.ai@pwc.com")
+    BOT_HEADLESS = os.getenv("BOT_HEADLESS", "True").lower() in ("true", "1", "yes")
+    BOT_JOIN_LEAD_MINUTES = int(os.getenv("BOT_JOIN_LEAD_MINUTES", "0"))
+    # Teams Meeting Link Mode ('dynamic' or 'static')
+    TEAMS_MEETING_LINK_TYPE = (os.getenv("TEAMS_MEETING_LINK_TYPE") or os.getenv("teams_meeting_link_type") or "dynamic").lower().strip()
+    STATIC_TEAMS_MEET_LINK = (os.getenv("STATIC_TEAMS_MEET_LINK") or os.getenv("static_teams_meet_link") or "https://teams.microsoft.com/meet/2817491042989613?p=0ypxpd7aGShiGBdRcI").strip()

@@ -40,10 +40,20 @@ def get_azure_graph_token():
 def create_open_teams_meeting(subject="Dynamic Open Meeting Room", start_dt=None, end_dt=None):
     """
     Creates an Open Microsoft Teams Meeting:
-    1. If DEFAULT_TEAMS_LINK is set in .env, return it immediately (recommended for pre-configured open lobby).
-    2. Try Microsoft Graph API with lobbyBypassSettings='everyone'.
-    3. Fallback to generating a valid formatted Teams URL with valid UUIDs.
+    1. If TEAMS_MEETING_LINK_TYPE is static, returns the static link from .env.
+    2. If DEFAULT_TEAMS_LINK is set in .env, return it immediately.
+    3. Try Microsoft Graph API with lobbyBypassSettings='everyone'.
+    4. Fallback to generating a valid formatted Teams URL with valid UUIDs.
     """
+    # 0. Check TEAMS_MEETING_LINK_TYPE configuration
+    from config import Config
+    link_type = (getattr(Config, 'TEAMS_MEETING_LINK_TYPE', None) or os.getenv('TEAMS_MEETING_LINK_TYPE') or os.getenv('teams_meeting_link_type') or 'dynamic').lower().strip()
+    if link_type == 'static':
+        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or os.getenv('static_teams_meet_link') or '').strip()
+        if static_link:
+            logger.info(f"Using configured static Teams meeting link: {static_link}")
+            return static_link
+
     # 1. Check if an explicit open master link is configured in .env
     default_open_link = os.getenv("DEFAULT_TEAMS_LINK")
     if default_open_link and default_open_link.strip():

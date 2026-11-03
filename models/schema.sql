@@ -178,3 +178,80 @@ CREATE TABLE IF NOT EXISTS kt_projects (
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
+
+
+-- Meet Agent Bot & Intelligence Tables
+CREATE TABLE IF NOT EXISTS scheduled_bot_jobs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    scheduled_at DATETIME NOT NULL,
+    meeting_link VARCHAR(500) NOT NULL,
+    status ENUM('SCHEDULED','JOINING','IN_CALL','COMPLETED','FAILED','CANCELLED') DEFAULT 'SCHEDULED',
+    retry_count INT DEFAULT 0,
+    error_message TEXT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_transcripts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    speaker_name VARCHAR(255),
+    text TEXT,
+    start_seconds FLOAT DEFAULT 0.0,
+    end_seconds FLOAT DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_intelligence (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    executive_summary TEXT,
+    total_speakers INT DEFAULT 0,
+    total_words INT DEFAULT 0,
+    total_duration_seconds INT DEFAULT 0,
+    dominant_speaker VARCHAR(255),
+    silent_count INT DEFAULT 0,
+    raw_analysis JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_qa (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    asked_by VARCHAR(255),
+    question TEXT,
+    answered_by VARCHAR(255),
+    answer TEXT,
+    is_answered BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_action_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    task TEXT,
+    owner VARCHAR(255),
+    deadline VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_decisions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    decision_text TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_reports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    meeting_id INT NOT NULL,
+    file_path VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);

@@ -24,7 +24,14 @@ def get_authenticated_user():
         raise Exception("Invalid token")
 
 def generate_teams_meeting_link(subject="Dynamic Open Meeting Room"):
-    """Generates an open Microsoft Teams meeting join link with lobby bypass."""
+    """Generates an open Microsoft Teams meeting join link with lobby bypass, or returns static configured link."""
+    from config import Config
+    link_type = (getattr(Config, 'TEAMS_MEETING_LINK_TYPE', None) or os.getenv('TEAMS_MEETING_LINK_TYPE') or os.getenv('teams_meeting_link_type') or 'dynamic').lower().strip()
+    if link_type == 'static':
+        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or os.getenv('static_teams_meet_link') or '').strip()
+        if static_link:
+            return static_link
+
     try:
         from services.teams_service import create_open_teams_meeting
         return create_open_teams_meeting(subject=subject)
@@ -347,6 +354,17 @@ def create_meeting():
                 trigger_meeting_notifications(meeting_id)
             except Exception as notify_err:
                 print(f"Error triggering notifications: {notify_err}")
+
+            try:
+                from services.bot.scheduler_service import MeetingSchedulerService
+                MeetingSchedulerService.schedule_meeting_job(
+                    meeting_id=meeting_id,
+                    scheduled_at=formatted_date,
+                    meeting_link=final_meeting_link,
+                    title=meeting_title
+                )
+            except Exception as bot_sched_err:
+                print(f"Error scheduling bot for meeting {meeting_id}: {bot_sched_err}")
 
             # Advance to the next calendar day (time will be set fresh in next iteration)
             current_day += timedelta(days=1)
@@ -695,6 +713,12 @@ def update_meeting_status(id):
                 pass
         query = "UPDATE meetings SET status = %s WHERE id = %s"
         execute_write(query, (data['status'], id))
+        if data.get('status') == 'cancelled':
+            try:
+                from services.bot.scheduler_service import MeetingSchedulerService
+                MeetingSchedulerService.cancel_meeting_job(id)
+            except Exception:
+                pass
         return jsonify({"success": True, "message": "Meeting status updated"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -1046,6 +1070,11 @@ def reschedule_meeting(id):
                 "UPDATE meetings SET scheduled_at = %s WHERE id = %s",
                 (prop_dt.strftime('%Y-%m-%d %H:%M:%S'), m_id)
             )
+            try:
+                from services.bot.scheduler_service import MeetingSchedulerService
+                MeetingSchedulerService.reschedule_meeting_job(m_id, prop_dt)
+            except Exception as bot_resched_err:
+                print(f"Error rescheduling bot for meeting {m_id}: {bot_resched_err}")
 
         # Sync attendance if participants were changed
         if updated_stakeholder_ids is not None:
@@ -1653,6 +1682,17 @@ def bulk_upload():
                 except Exception as notify_err:
                     print(f"Error triggering notifications for {meeting_id}: {notify_err}")
 
+                try:
+                    from services.bot.scheduler_service import MeetingSchedulerService
+                    MeetingSchedulerService.schedule_meeting_job(
+                        meeting_id=meeting_id,
+                        scheduled_at=formatted_date,
+                        meeting_link=final_meeting_link,
+                        title=title
+                    )
+                except Exception as bot_sched_err:
+                    print(f"Error scheduling bot for bulk meeting {meeting_id}: {bot_sched_err}")
+
                 current_day += timedelta(days=1)
 
             if all_stakeholder_ids:
@@ -1731,4 +1771,144 @@ def bulk_upload():
     except Exception as e:
         print(f"Error in bulk_upload: {e}")
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Meet Agent Bot & Intelligence Management Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@scheduling_bp.route('/meetings/<int:id>/bot-status', methods=['GET'])
+def get_meeting_bot_status(id):
+    """Returns the live execution status of the Meet Agent bot for a meeting."""
+    try:
+        q = """SELECT j.status as bot_status, j.scheduled_at, j.retry_count, j.error_message, j.updated_at,
+                         m.status as meeting_status, m.title, m.meeting_link
+                  FROM meetings m
+                  LEFT JOIN scheduled_bot_jobs j ON m.id = j.meeting_id
+                  WHERE m.id = %s"""
+        rows = execute_query(q, (id,))
+        if not rows:
+            return jsonify({"success": False, "message": "Meeting not found"}), 404
+        
+        info = rows[0]
+        return jsonify({
+            "success": True,
+            "data": {
+                "meeting_id": id,
+                "title": info.get("title"),
+                "meeting_link": info.get("meeting_link"),
+                "meeting_status": info.get("meeting_status"),
+                "bot_status": info.get("bot_status") or "NOT_SCHEDULED",
+                "scheduled_at": str(info.get("scheduled_at") or ""),
+                "retry_count": info.get("retry_count") or 0,
+                "error_message": info.get("error_message"),
+                "last_updated": str(info.get("updated_at") or "")
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@scheduling_bp.route('/meetings/<int:id>/intelligence', methods=['GET'])
+def get_meeting_intelligence(id):
+    """Fetches the post-meeting intelligence summary, Q&A, decisions, and action items."""
+    try:
+        intel_q = "SELECT * FROM meeting_intelligence WHERE meeting_id = %s ORDER BY id DESC LIMIT 1"
+        intel_rows = execute_query(intel_q, (id,))
+        intel = intel_rows[0] if intel_rows else {}
+
+        qa_q = "SELECT asked_by, question, answered_by, answer, is_answered FROM meeting_qa WHERE meeting_id = %s ORDER BY id ASC"
+        qa_rows = execute_query(qa_q, (id,))
+
+        ai_q = "SELECT task, owner, deadline FROM meeting_action_items WHERE meeting_id = %s ORDER BY id ASC"
+        ai_rows = execute_query(ai_q, (id,))
+
+        dec_q = "SELECT decision_text FROM meeting_decisions WHERE meeting_id = %s ORDER BY id ASC"
+        dec_rows = execute_query(dec_q, (id,))
+
+        trans_q = "SELECT speaker_name, text, start_seconds, end_seconds FROM meeting_transcripts WHERE meeting_id = %s ORDER BY start_seconds ASC, id ASC"
+        trans_rows = execute_query(trans_q, (id,))
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "meeting_id": id,
+                "executive_summary": intel.get("executive_summary") or "",
+                "total_duration_seconds": intel.get("total_duration_seconds") or 0,
+                "total_speakers": intel.get("total_speakers") or 0,
+                "total_words": intel.get("total_words") or 0,
+                "dominant_speaker": intel.get("dominant_speaker"),
+                "questions": qa_rows or [],
+                "action_items": ai_rows or [],
+                "decisions": [d["decision_text"] for d in dec_rows] if dec_rows else [],
+                "transcripts": trans_rows or []
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@scheduling_bp.route('/meetings/<int:id>/report', methods=['GET'])
+def download_meeting_report(id):
+    """Downloads or generates the publication-grade PDF intelligence report."""
+    from flask import send_file
+    import os
+    try:
+        # Check if report already exists in meeting_reports
+        rep_q = "SELECT file_path FROM meeting_reports WHERE meeting_id = %s ORDER BY id DESC LIMIT 1"
+        rep_rows = execute_query(rep_q, (id,))
+        file_path = rep_rows[0]["file_path"] if rep_rows else None
+
+        if not file_path or not os.path.exists(file_path):
+            from services.bot.report_service import ReportService
+            file_path = ReportService.generate_pdf(id)
+
+        if not os.path.exists(file_path):
+            return jsonify({"success": False, "message": "Failed to locate generated report."}), 404
+
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=f"KT_Meeting_{id}_Intelligence_Report.pdf",
+            mimetype="application/pdf"
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@scheduling_bp.route('/meetings/<int:id>/bot-join-now', methods=['POST'])
+def bot_join_now(id):
+    """Allows the Delivery/Engagement Manager to manually trigger the Meet Agent bot immediately."""
+    try:
+        user_info = get_authenticated_user()
+        uid = user_info['sub']
+        u = execute_query("SELECT role FROM users WHERE id = %s", (uid,))
+        if not u or u[0]['role'] != 'Delivery / Engagement Manager':
+            return jsonify({"success": False, "message": "Permission denied. Only Delivery / Engagement Managers can trigger the bot."}), 403
+
+        from services.bot.scheduler_service import MeetingSchedulerService
+        MeetingSchedulerService.trigger_bot_for_meeting(id)
+        return jsonify({
+            "success": True,
+            "message": f"Meet Agent Bot instructed to join meeting #{id} immediately."
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@scheduling_bp.route('/meetings/<int:id>/bot-conclude', methods=['POST'])
+def bot_conclude(id):
+    """Allows Delivery/Engagement Manager to conclude a meeting and run the intelligence pipeline immediately."""
+    try:
+        user_info = get_authenticated_user()
+        from services.bot.browser_bot_service import BrowserMeetingBot
+        from services.bot.analysis_service import AnalysisEngine
+
+        BrowserMeetingBot.stop_bot(id)
+        res = AnalysisEngine.run_post_meeting_pipeline(id)
+        return jsonify({
+            'success': True,
+            'message': f'Meeting #{id} concluded and intelligence report generated successfully.',
+            'data': res
+        }), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
