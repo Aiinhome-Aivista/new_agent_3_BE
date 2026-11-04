@@ -1,8 +1,11 @@
 import os
+import re
 import time
 import urllib.parse
 import threading
 import logging
+import tempfile
+import shutil
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Set, Tuple
 from playwright.sync_api import sync_playwright
@@ -62,13 +65,46 @@ class BrowserMeetingBot:
         captured_roster: List[Dict[str, Any]] = []
         captured_speech: List[Dict[str, Any]] = []
         completed_normally: bool = False
+        start_ts = time.time()
 
         try:
-            with sync_playwright() as p:
-                profile_dir = os.path.abspath("teams_bot_profile")
-                os.makedirs(profile_dir, exist_ok=True)
+            # Preload Knowledge Giver and registered attendees for speaker resolution
+            meeting_giver = None
+            known_attendees = []
+            try:
+                # 1. Fetch registered attendees from attendance table & identify Outgoing SME (Knowledge Giver)
+                att_info = execute_query(
+                    """SELECT s.id, s.name, s.role FROM attendance a 
+                       JOIN stakeholders s ON a.stakeholder_id = s.id 
+                       WHERE a.meeting_id = %s""",
+                    (meeting_id,)
+                )
+                for ar in (att_info or []):
+                    s_name = ar.get("name")
+                    s_role = (ar.get("role") or "").lower()
+                    if s_name:
+                        known_attendees.append(s_name)
+                        if "giver" in s_role or "outgoing" in s_role or s_role == "outgoing_sme":
+                            meeting_giver = s_name
 
-                logger.info(f"Launching Chromium context for meeting #{meeting_id}...")
+                # 2. If meeting_giver not found in attendance, check global Outgoing SME
+                if not meeting_giver:
+                    global_kg = execute_query(
+                        """SELECT name FROM stakeholders 
+                           WHERE role LIKE '%Giver%' OR role LIKE '%outgoing%' OR role = 'outgoing_sme' 
+                           LIMIT 1"""
+                    )
+                    if global_kg and global_kg[0].get("name"):
+                        meeting_giver = global_kg[0]["name"]
+
+                logger.info(f"[Preload] Meeting #{meeting_id} Knowledge Giver: '{meeting_giver}', Known Attendees: {known_attendees}")
+            except Exception as preload_err:
+                logger.debug(f"Preload attendees note: {preload_err}")
+
+            with sync_playwright() as p:
+                profile_dir = tempfile.mkdtemp(prefix=f"teams_bot_{meeting_id}_")
+
+                logger.info(f"Launching Chromium context for meeting #{meeting_id} (Meet Agent pure Live Captions mode)...")
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=profile_dir,
                     headless=headless,
@@ -78,31 +114,59 @@ class BrowserMeetingBot:
                         "--use-fake-device-for-media-stream",
                         "--disable-blink-features=AutomationControlled",
                         "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-notifications",
+                        "--autoplay-policy=no-user-gesture-required",
                     ],
                     viewport={"width": 1280, "height": 800},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 )
                 page = context.pages[0] if context.pages else context.new_page()
 
-                logger.info(f"[Bot] Navigating to meeting URL: {join_url[:100]}...")
+                # Bypass launcher page for short Teams meet links
+                navigate_url = join_url
+                if "teams.microsoft.com" in join_url or "teams.live.com" in join_url:
+                    parsed = urllib.parse.urlparse(join_url)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    passcode = qs.get("p", [None])[0]
+
+                    if "/meet/" in parsed.path and passcode:
+                        meet_code = parsed.path.split("/meet/")[-1].strip("/")
+                        direct = f"https://teams.microsoft.com/v2/?meetingjoin=true#/meet/{meet_code}?p={passcode}&anon=true"
+                        logger.info(f"[Teams Bot] Web join link constructed → {direct[:100]}")
+                        navigate_url = direct
+                    else:
+                        logger.info(f"[Teams Bot] Navigating to Teams URL: {join_url[:100]}")
+
+                logger.info(f"[Bot] Navigating to meeting URL: {navigate_url[:100]}...")
                 try:
-                    page.goto(join_url, wait_until="domcontentloaded", timeout=60000)
+                    page.goto(navigate_url, wait_until="domcontentloaded", timeout=90000)
                 except Exception as nav_err:
-                    logger.warning(f"[Bot] goto warning: {nav_err}")
+                    logger.warning(f"[Bot] goto warning (may still be loading): {nav_err}")
 
                 # Run session based on platform
                 if "teams.microsoft.com" in join_url or "teams.live.com" in join_url:
-                    captured_roster, captured_speech, completed_normally = cls._run_teams_session(page, meeting_id, stop_event)
+                    captured_roster, captured_speech, completed_normally = cls._run_teams_session(
+                        page, meeting_id, stop_event, captured_roster, captured_speech,
+                        known_attendees=known_attendees
+                    )
                 elif "meet.google.com" in join_url:
-                    captured_roster, captured_speech, completed_normally = cls._run_google_meet_session(page, meeting_id, stop_event)
+                    captured_roster, captured_speech, completed_normally = cls._run_google_meet_session(
+                        page, meeting_id, stop_event, captured_roster, captured_speech
+                    )
                 else:
                     logger.warning(f"Unrecognized meeting URL: {join_url}, trying generic teams session...")
-                    captured_roster, captured_speech, completed_normally = cls._run_teams_session(page, meeting_id, stop_event)
+                    captured_roster, captured_speech, completed_normally = cls._run_teams_session(
+                        page, meeting_id, stop_event, captured_roster, captured_speech,
+                        known_attendees=known_attendees
+                    )
 
                 try:
                     context.close()
                 except Exception:
                     pass
+                if profile_dir and os.path.exists(profile_dir):
+                    shutil.rmtree(profile_dir, ignore_errors=True)
 
         except Exception as e:
             logger.error(f"Browser bot error for meeting #{meeting_id}: {e}", exc_info=True)
@@ -142,27 +206,43 @@ class BrowserMeetingBot:
                 )
 
     @classmethod
-    def _run_teams_session(cls, page, meeting_id: int, stop_event: threading.Event) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
-        """Automates MS Teams join, lobby waiting, participant scraping, and captions."""
-        logger.info(f"[Teams Bot] Starting session for meeting #{meeting_id}...")
+    def _run_teams_session(
+        cls,
+        page,
+        meeting_id: int,
+        stop_event: threading.Event,
+        roster_participants: Optional[List[Dict[str, Any]]] = None,
+        speech_segments: Optional[List[Dict[str, Any]]] = None,
+        known_attendees: Optional[List[str]] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+        """Automates MS Teams join, lobby waiting, participant scraping, and live captions."""
+        logger.info(f"[Teams Bot] Starting session for meeting #{meeting_id} (pure Teams Live Captions)...")
         bot_name = Config.BOT_NAME
-        roster_participants: List[Dict[str, Any]] = []
-        speech_segments: List[Dict[str, Any]] = []
+        if roster_participants is None:
+            roster_participants = []
+        if speech_segments is None:
+            speech_segments = []
+        if known_attendees is None:
+            known_attendees = []
         seen_captions: Set[str] = set()
         seen_names: Set[str] = set()
+        for p in roster_participants:
+            if p.get("name"):
+                seen_names.add(p["name"])
 
         in_call = False
         in_lobby = False
         has_ever_joined_call = False
         completed_normally = False
         start_ts = time.time()
-        last_speech_time = time.time()
-        last_human_seen_time = time.time()
-        alone_since = None
-        consecutive_alone_checks = 0
+        in_call_start_ts = 0.0
         join_clicked = False
         roster_panel_opened = False
         captions_enabled = False
+        last_caption_toggle_ts = 0.0
+        last_nudge_ts = 0.0
+        controls_missing_count = 0
+        alone_consecutive_count = 0
 
         SYSTEM_UI_WORDS = {
             "attendees", "organizer", "organizers", "presenters", "others invited",
@@ -181,8 +261,6 @@ class BrowserMeetingBot:
             time.sleep(1)
 
             try:
-                body_text = page.locator("body").inner_text(timeout=500).lower()
-
                 # 1. Handle launcher screen ("Continue on this browser")
                 for sel in [
                     'button[data-tid="joinOnWeb"]',
@@ -193,7 +271,7 @@ class BrowserMeetingBot:
                     try:
                         b = page.locator(sel)
                         if b.count() > 0 and b.first.is_visible(timeout=300):
-                            logger.info(f"[Teams Bot] Clicking '{sel}'...")
+                            logger.info(f"[Teams Bot] Clicking launcher button '{sel}'...")
                             b.first.click()
                             time.sleep(3)
                             break
@@ -202,13 +280,20 @@ class BrowserMeetingBot:
 
                 # 2. Fill Display Name if on prejoin screen
                 name_input = page.locator(
-                    'input[data-tid="prejoin-display-name-input"], input#username, input[name="username"], input[aria-label*="name" i], input[placeholder*="name" i]'
+                    'input[data-tid="prejoin-display-name-input"], '
+                    'input#username, '
+                    'input[name="username"], '
+                    'input[aria-label*="name" i], '
+                    'input[placeholder*="name" i], '
+                    'input[placeholder*="Enter name" i]'
                 )
                 if name_input.count() > 0 and name_input.first.is_visible(timeout=300):
                     val = name_input.first.input_value()
                     if not val or val.strip() == "":
                         logger.info(f"[Teams Bot] Entering display name: '{bot_name}'")
+                        name_input.first.click()
                         name_input.first.fill(bot_name)
+                        name_input.first.press("Tab")
                         time.sleep(0.5)
 
                 # 3. Mute mic if unmuted
@@ -241,29 +326,47 @@ class BrowserMeetingBot:
                     except Exception:
                         pass
 
-                # 5. Click Join Button
+                # 5. Click Join Button once name is entered
                 if not join_clicked:
                     for join_sel in [
-                        'button:has-text("Join now")',
                         'button[data-tid="prejoin-join-button"]',
+                        'button:has-text("Join now")',
                         'button:has-text("Join meeting")',
                         'button:has-text("Join")'
                     ]:
                         try:
                             jb = page.locator(join_sel)
                             if jb.count() > 0 and jb.first.is_visible(timeout=300):
-                                logger.info(f"[Teams Bot] Clicking Join Button ({join_sel})...")
-                                jb.first.click()
-                                join_clicked = True
-                                time.sleep(3)
-                                break
+                                is_disabled = jb.first.get_attribute("disabled") is not None
+                                if not is_disabled:
+                                    logger.info(f"[Teams Bot] Clicking Join Button ({join_sel})...")
+                                    jb.first.click()
+                                    join_clicked = True
+                                    time.sleep(3)
+                                    break
                         except Exception:
                             pass
 
                 # 6. Check if in lobby or already entered call
-                if "let you in shortly" in body_text or "waiting in the lobby" in body_text or "let you in soon" in body_text:
+                body_text = ""
+                try:
+                    body_text = page.locator("body").inner_text(timeout=500).lower()
+                except Exception:
+                    pass
+
+                lobby_phrases = [
+                    "someone will let you in shortly",
+                    "let you in shortly",
+                    "waiting in the lobby",
+                    "let you in soon",
+                    "waiting for host",
+                    "we'll let people know you're waiting",
+                    "someone in the meeting should let you in",
+                    "waiting to be admitted"
+                ]
+                if any(p in body_text for p in lobby_phrases):
                     in_lobby = True
-                    logger.info(f"[Teams Bot] Waiting in lobby for meeting #{meeting_id}...")
+                    logger.info(f"[Teams Bot] Successfully submitted join request! Waiting in lobby for meeting #{meeting_id}...")
                     break
 
                 # If leave button or in-call controls appear right away
@@ -271,8 +374,6 @@ class BrowserMeetingBot:
                     if page.locator(l_chk).count() > 0:
                         in_call = True
                         has_ever_joined_call = True
-                        last_human_seen_time = time.time()
-                        last_speech_time = time.time()
                         logger.info(f"[Teams Bot] Successfully entered live call for meeting #{meeting_id}!")
                         try:
                             execute_write("UPDATE scheduled_bot_jobs SET status = 'IN_CALL' WHERE meeting_id = %s", (meeting_id,))
@@ -288,23 +389,37 @@ class BrowserMeetingBot:
         # Step 2: Monitoring Loop (Lobby wait + In-Call Telemetry)
         logger.info(f"[Teams Bot] Beginning meeting monitoring loop for meeting #{meeting_id}...")
         last_lobby_log = time.time()
+        last_debug_screenshot_ts = 0
+        max_duration_seconds = 14400  # 4-hour safety ceiling
 
         while not stop_event.is_set():
             time.sleep(2)
             try:
-                body_text = page.locator("body").inner_text(timeout=500).lower()
+                # 1. Enforce safety ceiling
+                if (time.time() - start_ts) > max_duration_seconds:
+                    logger.info(f"[Teams Bot] Maximum session duration (4h) reached for meeting #{meeting_id}. Concluding.")
+                    completed_normally = True
+                    break
 
-                # Check if still in lobby
+                body_text = ""
+                try:
+                    body_text = page.locator("body").inner_text(timeout=500).lower()
+                except Exception:
+                    pass
+
+                # 2. Check if still in lobby
                 in_lobby_phrases = [
+                    "someone will let you in shortly",
                     "let you in shortly",
                     "waiting in the lobby",
                     "let you in soon",
                     "we'll let people know you're waiting",
-                    "someone in the meeting should let you in"
+                    "someone in the meeting should let you in",
+                    "waiting to be admitted"
                 ]
                 is_lobby_text = any(phrase in body_text for phrase in in_lobby_phrases)
 
-                # Check in-call controls and elements
+                # 3. Check in-call controls and elements
                 has_leave_btn = False
                 for l_sel in [
                     'button:has-text("Leave")',
@@ -325,15 +440,13 @@ class BrowserMeetingBot:
 
                 has_controls = False
                 for c_sel in [
+                    'button[data-tid="calling-participants-button"]',
                     'button[data-tid="roster-button"]',
+                    'button#roster-button',
+                    'button[aria-label*="Show participants" i]',
+                    'button[aria-label*="People" i]',
                     'button:has-text("People")',
-                    'button[aria-label*="people" i]',
-                    'button[aria-label*="participants" i]',
-                    'button:has-text("Chat")',
-                    'button[data-tid="chat-button"]',
-                    'button:has-text("More")',
-                    'button[data-tid="more-actions-button"]',
-                    'video'
+                    'button[data-tid="chat-button"]'
                 ]:
                     try:
                         if page.locator(c_sel).count() > 0:
@@ -342,61 +455,192 @@ class BrowserMeetingBot:
                     except Exception:
                         pass
 
-                # If lobby message disappeared and call controls / buttons are detected (or "leave" in body_text)
-                if not is_lobby_text and (has_leave_btn or has_controls or ("leave" in body_text and "join" not in body_text)):
+                # Accurate in-call determination:
+                # Must NOT have lobby text or join button, and MUST have real in-call leave/hangup button or calling toolbar
+                if is_lobby_text or "join now" in body_text or "someone will let you in shortly" in body_text:
+                    in_call = False
+                    in_lobby = True
+                elif has_leave_btn or (has_controls and "join" not in body_text):
                     if not in_call:
                         in_call = True
+                        in_call_start_ts = time.time()
                         has_ever_joined_call = True
                         in_lobby = False
-                        last_human_seen_time = time.time()
-                        last_speech_time = time.time()
                         logger.info(f"[Teams Bot] Bot has been admitted into live call for meeting #{meeting_id}!")
                         try:
                             execute_write("UPDATE scheduled_bot_jobs SET status = 'IN_CALL' WHERE meeting_id = %s", (meeting_id,))
                         except Exception:
                             pass
 
-                # If in call, open People panel once to reveal participants
-                if in_call and not roster_panel_opened:
-                    for r_sel in [
-                        'button[data-tid="roster-button"]',
-                        'button:has-text("People")',
-                        'button[aria-label*="people" i]',
-                        'button[aria-label*="show participants" i]',
-                        'button[aria-label*="participants" i]'
-                    ]:
-                        try:
-                            rb = page.locator(r_sel)
-                            if rb.count() > 0 and rb.first.is_visible(timeout=300):
-                                rb.first.click()
-                                roster_panel_opened = True
-                                logger.info(f"[Teams Bot] Opened People panel to monitor participants for meeting #{meeting_id}.")
-                                time.sleep(1)
-                                break
-                        except Exception:
-                            pass
+                # 4. If in call, continuously ensure People panel is open to reveal participants
+                if in_call:
+                    is_roster_open = False
+                    try:
+                        is_roster_open = page.evaluate("""
+                            () => {
+                                const text = document.body.innerText || '';
+                                return text.includes('In this meeting') || text.includes('Participants');
+                            }
+                        """)
+                    except Exception:
+                        pass
+                    if not is_roster_open:
+                        for r_sel in [
+                            'button[data-tid="calling-participants-button"]',
+                            'button#roster-button',
+                            'button[data-tid="roster-button"]',
+                            'button[aria-label*="Show participants" i]',
+                            'button[aria-label*="People" i]',
+                            'button[aria-label*="participants" i]',
+                            'button:has-text("People")'
+                        ]:
+                            try:
+                                rb = page.locator(r_sel)
+                                if rb.count() > 0 and rb.first.is_visible(timeout=300):
+                                    rb.first.click()
+                                    roster_panel_opened = True
+                                    logger.info(f"[Teams Bot] Opened People panel to monitor participants for meeting #{meeting_id}.")
+                                    time.sleep(1)
+                                    break
+                            except Exception:
+                                pass
 
-                # If in call, attempt to enable live captions once
-                if in_call and not captions_enabled:
-                    for more_sel in ['button[data-tid="more-actions-button"]', 'button:has-text("More")', 'button[aria-label*="More" i]']:
-                        try:
-                            mb = page.locator(more_sel)
-                            if mb.count() > 0 and mb.first.is_visible(timeout=300):
-                                mb.first.click()
-                                time.sleep(0.5)
-                                for cap_btn_sel in ['button:has-text("Turn on live captions")', 'div:has-text("Turn on live captions")', '[aria-label*="live captions" i]']:
-                                    cap_b = page.locator(cap_btn_sel)
-                                    if cap_b.count() > 0 and cap_b.first.is_visible(timeout=300):
-                                        cap_b.first.click()
-                                        captions_enabled = True
-                                        logger.info(f"[Teams Bot] Enabled live captions for meeting #{meeting_id}.")
-                                        break
+                # 5. If in call, continuously ensure live captions are autonomously activated
+                now_ts = time.time()
+                # Periodic debug screenshot so we can verify exact UI state
+                if in_call and (now_ts - last_debug_screenshot_ts > 10):
+                    last_debug_screenshot_ts = now_ts
+                    try:
+                        page.screenshot(path="scratch/bot_current_view.png")
+                    except Exception:
+                        pass
+
+                # Check if captions container exists and is visible in the DOM
+                has_captions_dom = False
+                try:
+                    has_captions_dom = page.evaluate("""
+                        () => {
+                            const el = document.querySelector(
+                                '[data-tid="closed-caption-v2-virtual-list-content"], ' +
+                                '[data-tid="closed-caption-chat-message"], ' +
+                                '[data-tid="closed-captions-container"], ' +
+                                '[data-tid="closed-captions-renderer"], ' +
+                                '[data-tid="closed-caption-renderer-wrapper"], ' +
+                                'div[class*="closedCaptions"], ' +
+                                'div[class*="captionContainer"]'
+                            );
+                            return !!(el && el.offsetParent !== null);
+                        }
+                    """)
+                except Exception:
+                    pass
+
+                if has_captions_dom:
+                    captions_enabled = True
+
+                # If captions container not visible, attempt activation
+                if in_call and not captions_enabled and (now_ts - last_caption_toggle_ts > 12):
+                    last_caption_toggle_ts = now_ts
+                    try:
+                        # Wiggle mouse near top bar (where More button lives)
+                        page.mouse.move(800, 25)
+                        time.sleep(0.3)
+
+                        # Find and click More actions button
+                        more_btn = None
+                        for more_sel in [
+                            'button[aria-label*="More actions" i]',
+                            'button[aria-label*="More" i]',
+                            'button:has-text("More")',
+                            'button[data-tid*="more-actions"]',
+                            'button#callingButtons-showMoreBtn',
+                            'button[id*="more-button"]',
+                            'button[data-tid="overflow-button"]'
+                        ]:
+                            try:
+                                b = page.locator(more_sel)
+                                if b.count() > 0:
+                                    more_btn = b.first
+                                    break
+                            except Exception:
+                                pass
+
+                        if more_btn:
+                            more_btn.click(force=True, timeout=1000)
+                            time.sleep(0.8)
+                            logger.info(f"[Teams Bot] Clicked More actions menu button for meeting #{meeting_id}.")
+
+                            # Find Captions menu item
+                            caption_btn = page.locator(
+                                '[role="menuitem"], [role="menuitemcheckbox"], .fui-MenuItem, button'
+                            ).filter(has_text=re.compile(r'Captions', re.I)).first
+
+                            if caption_btn.count() > 0:
+                                is_checked = caption_btn.evaluate("""el => {
+                                    return el.getAttribute('aria-checked') === 'true' || 
+                                           el.classList.contains('fui-MenuItem--checked') ||
+                                           !!el.querySelector('[data-icon-name="Checkmark"], [class*="checkmark"], svg[data-icon-name*="check" i]');
+                                }""")
+                                if not is_checked:
+                                    caption_btn.click(force=True, timeout=1000)
+                                    captions_enabled = True
+                                    logger.info(f"[Teams Bot] Native clicked 'Captions' to enable for meeting #{meeting_id}!")
+                                    time.sleep(0.8)
+                                else:
+                                    captions_enabled = True
+                                    logger.info(f"[Teams Bot] 'Captions' already checked for meeting #{meeting_id}.")
                                 page.keyboard.press("Escape")
-                                break
-                        except Exception:
-                            pass
+                                time.sleep(0.3)
+                            else:
+                                logger.info(f"[Teams Bot] Captions menu item not found in More menu.")
+                                page.keyboard.press("Escape")
+                        else:
+                            logger.warning(f"[Teams Bot] More actions button not found for meeting #{meeting_id}.")
 
-                # If still in lobby, log periodic heartbeat & enforce lobby timeout
+                        # Spoken language confirmation dialog if shown
+                        for confirm_sel in [
+                            'button:has-text("Confirm")',
+                            'button:has-text("Done")',
+                            'button:has-text("Save")',
+                            'button:has-text("Turn on")',
+                            'button:has-text("Got it")',
+                            'button[data-tid="confirm-spoken-language-button"]'
+                        ]:
+                            try:
+                                c_btn = page.locator(confirm_sel)
+                                if c_btn.count() > 0 and c_btn.first.is_visible(timeout=300):
+                                    c_btn.click(force=True)
+                                    captions_enabled = True
+                                    logger.info(f"[Teams Bot] Confirmed spoken language dialog.")
+                                    time.sleep(0.5)
+                            except Exception:
+                                pass
+
+                    except Exception as cap_err:
+                        logger.info(f"[Teams Bot] Caption toggle note: {cap_err}")
+
+                        # Fallback keyboard shortcuts
+                        if not captions_enabled:
+                            try:
+                                page.locator('body').focus()
+                                page.keyboard.press("Control+Shift+C")
+                                time.sleep(0.2)
+                                page.keyboard.press("Alt+Shift+C")
+                            except Exception:
+                                pass
+
+                    except Exception as cap_err:
+                        logger.debug(f"[Teams Bot] Caption toggle note: {cap_err}")
+
+                # Keep Teams awake and prevent toolbar auto-hiding
+                if in_call and (now_ts - last_nudge_ts > 10):
+                    last_nudge_ts = now_ts
+                    try:
+                        page.mouse.move(500, 300)
+                    except Exception:
+                        pass
+
+                # 6. If still in lobby, log periodic heartbeat & enforce lobby timeout
                 if not in_call and (in_lobby or is_lobby_text):
                     in_lobby = True
                     if time.time() - last_lobby_log > 30:
@@ -411,7 +655,7 @@ class BrowserMeetingBot:
                             pass
                         break
 
-                # Check if host explicitly denied bot in lobby
+                # 7. Check if host explicitly denied bot in lobby
                 lobby_denial_phrases = [
                     "denied your request to join",
                     "denied entry",
@@ -429,272 +673,449 @@ class BrowserMeetingBot:
                         pass
                     break
 
-                # Check if meeting concluded or bot was removed by host
+                # 8. Check if meeting concluded or host removed bot from meeting
                 conclusion_phrases = [
                     "the meeting has ended",
                     "this meeting has ended",
                     "the call has ended",
                     "you left the meeting",
                     "you've been removed",
+                    "you were removed from the meeting",
+                    "someone removed you from the meeting",
+                    "someone removed you",
+                    "you were removed",
+                    "removed from the meeting",
                     "meeting ended",
                     "the host ended the meeting",
-                    "you were removed from the meeting",
+                    "the organizer ended the meeting",
+                    "the meeting has ended for everyone",
                     "no longer in the meeting",
-                    "rejoin",
-                    "how was the call quality"
+                    "return to home screen",
+                    "how was the call quality",
+                    "rate your call quality",
+                    "rate this call",
+                    "you left the call",
+                    "rejoin"
                 ]
                 if any(phrase in body_text for phrase in conclusion_phrases):
                     if in_call or has_ever_joined_call:
-                        logger.info(f"[Teams Bot] Meeting #{meeting_id} conclusion detected via UI message.")
+                        logger.info(f"[Teams Bot] Meeting #{meeting_id} conclusion detected via UI message: {[p for p in conclusion_phrases if p in body_text]}")
                         completed_normally = True
                     else:
-                        logger.warning(f"[Teams Bot] Host denied or dismissed bot before call started for meeting #{meeting_id}.")
+                        logger.info(f"[Teams Bot] Meeting #{meeting_id} ended before admission.")
                         completed_normally = False
-                        try:
-                            execute_write("UPDATE scheduled_bot_jobs SET status = 'FAILED', error_message = 'Host dismissed bot before entering call' WHERE meeting_id = %s", (meeting_id,))
-                        except Exception:
-                            pass
                     break
 
-                # Auto-conclude phrases ONLY when call is genuinely empty after having run
-                # (Notice: NEVER include 'waiting for others to join' which is a pre-call waiting message!)
-                everyone_left_phrases = [
-                    "only one on the call",
-                    "only one here",
-                    "only person in this meeting",
-                    "only person here",
-                    "everyone else has left",
-                    "everyone else left",
-                    "nobody else is here",
-                    "no one else is here",
-                    "we'll end the meeting soon",
-                    "because you're the only person",
-                    "this meeting will end in",
-                    "looks like you're alone",
-                    "you're alone",
-                    "all participants have left",
-                    "would you like to leave",
-                    "are you still there"
-                ]
-                is_alone_by_text = any(phrase in body_text for phrase in everyone_left_phrases)
+                # 8a. Rejoin / Dismiss prompt detection (shown when removed by host or meeting concludes)
+                has_rejoin_prompt = False
+                for rej_sel in ['button:has-text("Rejoin")', 'button[data-tid="rejoin-button"]', 'button:has-text("Dismiss")']:
+                    try:
+                        r_el = page.locator(rej_sel)
+                        if r_el.count() > 0 and r_el.first.is_visible(timeout=100):
+                            has_rejoin_prompt = True
+                            break
+                    except Exception:
+                        pass
+                if has_rejoin_prompt and (in_call or has_ever_joined_call):
+                    logger.info(f"[Teams Bot] Rejoin / Dismiss dialog visible for meeting #{meeting_id}. Host removed bot or call concluded.")
+                    completed_normally = True
+                    break
 
-                # Check active human count in roster (Scoping to roster panels, ignoring app navigation items)
-                active_human_count = 0
-                if in_call:
-                    roster_selectors = [
-                        'div[data-tid="roster-panel"] [role="listitem"]',
-                        'aside[aria-label*="Participants" i] [role="listitem"]',
-                        'div[aria-label*="Participants" i] [role="listitem"]',
-                        'div[data-tid*="participant"]',
-                        'div[data-tid*="roster"]',
-                        'div[class*="roster-participant"]',
-                        'div[class*="rosterParticipant"]'
-                    ]
-                    p_active = page.locator(", ".join(roster_selectors))
-                    for k in range(min(p_active.count(), 50)):
-                        try:
-                            item_t = p_active.nth(k).inner_text(timeout=100).splitlines()[0].strip().lower()
-                            if item_t and len(item_t) > 2 and item_t not in SYSTEM_UI_WORDS:
-                                active_human_count += 1
-                        except Exception:
-                            pass
-
-                # Check active stage participant / video stream tiles (including avatars when camera is off)
-                stage_tiles_count = 0
-                if in_call:
-                    stage_selectors = [
-                        'video',
-                        'div[data-tid*="video-tile"]',
-                        'div[data-tid*="participant-tile"]',
-                        'div[data-tid*="calling-tile"]',
-                        'div[data-cid*="calling-participant-stream"]',
-                        'div[class*="participant-stream"]',
-                        'div[class*="stage-item"]',
-                        'div[class*="avatar"]'
-                    ]
-                    stage_tiles_count = page.locator(", ".join(stage_selectors)).count()
-
-                if active_human_count > 0 or stage_tiles_count > 1 or len(seen_names) > 0:
-                    last_human_seen_time = time.time()
-
-                # Guardrail: Bot MUST be in call for at least 120 seconds (2 mins) before empty-call exit can trigger
-                time_in_call = time.time() - start_ts
-                is_empty_call = False
-
-                if in_call and time_in_call >= 120:
-                    # Condition 1: Explicit banner that everyone left
-                    if is_alone_by_text:
-                        is_empty_call = True
-                    # Condition 2: Attendees were previously seen/recorded, and now all left (0 active humans for >= 30s)
-                    elif (len(seen_names) > 0 or len(speech_segments) > 0) and active_human_count == 0 and stage_tiles_count <= 1:
-                        if (time.time() - last_human_seen_time) >= 30:
-                            is_empty_call = True
-
-                if is_empty_call:
-                    consecutive_alone_checks += 1
-                    if alone_since is None:
-                        alone_since = time.time()
-                        logger.info(
-                            f"[Teams Bot] Meeting #{meeting_id}: possible empty call detected "
-                            f"(roster_humans={active_human_count}, stage_tiles={stage_tiles_count}, banner={is_alone_by_text}, call_duration={int(time_in_call)}s). Verifying..."
-                        )
-                    elif (time.time() - alone_since >= 25) or consecutive_alone_checks >= 10:
-                        logger.info(f"[Teams Bot] All human attendees have departed meeting #{meeting_id}. Executing auto-leave.")
-                        for leave_btn_sel in [
-                            'button[data-tid="hangup-button"]',
-                            '#hangup-button',
-                            'button[data-tid="call-end"]',
-                            'button[aria-label*="Leave" i]',
-                            'button[aria-label*="Hang up" i]',
-                            'button:has-text("Leave")',
-                            'button:has-text("Hang up")'
-                        ]:
-                            try:
-                                lb = page.locator(leave_btn_sel)
-                                if lb.count() > 0 and lb.first.is_visible(timeout=300):
-                                    lb.first.click()
-                                    time.sleep(1)
-                                    confirm_btn = page.locator('button:has-text("Leave meeting"), button:has-text("Leave call")')
-                                    if confirm_btn.count() > 0 and confirm_btn.first.is_visible(timeout=300):
-                                        confirm_btn.first.click()
-                                    break
-                            except Exception:
-                                pass
+                # 8b. Disconnection detection: If in-call and calling toolbar disappears
+                if in_call and not has_leave_btn and not has_controls:
+                    # Teams auto-hides the control bar when mouse is inactive. Wiggle mouse.
+                    try:
+                        page.mouse.move(600, 400)
+                    except Exception:
+                        pass
+                    controls_missing_count += 1
+                    # Only conclude if controls missing for >= 60 consecutive checks (~120s)
+                    if controls_missing_count >= 60:
+                        logger.info(f"[Teams Bot] In-call controls disappeared for >2m for meeting #{meeting_id}. Meeting concluded or ended by host.")
                         completed_normally = True
                         break
                 else:
-                    alone_since = None
-                    consecutive_alone_checks = 0
+                    controls_missing_count = 0
 
-                # Inactivity safety guardrail:
-                # If call elapsed > 3 minutes, and no speech for >60s and no humans seen:
-                call_elapsed = time.time() - start_ts
-                if in_call and call_elapsed > 180:
-                    if (time.time() - last_speech_time > 60) and (active_human_count == 0 or stage_tiles_count <= 1):
-                        logger.info(f"[Teams Bot] Meeting #{meeting_id} silence timeout (>60s idle/alone). Concluding.")
-                        completed_normally = True
-                        break
-
-                # Scrape participants if in call
-                if in_call:
-                    roster_selectors = [
-                        'div[data-tid="roster-panel"] [role="listitem"]',
-                        'aside[aria-label*="Participants" i] [role="listitem"]',
-                        'div[aria-label*="Participants" i] [role="listitem"]',
-                        'div[data-tid="roster-participant"]',
-                        'li[data-tid="roster-participant"]',
-                        'div[class*="roster-participant"]',
-                        'div[class*="rosterParticipant"]'
-                    ]
-                    p_els = page.locator(", ".join(roster_selectors))
-                    if p_els.count() > 0:
-                        for i in range(min(p_els.count(), 30)):
-                            try:
-                                raw_t = p_els.nth(i).inner_text(timeout=200)
-                                name_text = raw_t.splitlines()[0].strip() if raw_t else ""
-                                if name_text and len(name_text) > 2 and name_text.lower() not in SYSTEM_UI_WORDS:
-                                    if name_text not in seen_names:
-                                        seen_names.add(name_text)
-                                        roster_participants.append({
-                                            "name": name_text,
-                                            "join_time": datetime.now(timezone.utc).isoformat()
-                                        })
-                            except Exception:
-                                pass
-
-                # Scrape live captions if in call
-                if in_call:
-                    for cap_sel in [
-                        'div[data-tid="closed-caption"]',
-                        'div[class*="closed-caption"]',
-                        'div[class*="caption-text"]',
-                        'div[class*="subtitle"]'
-                    ]:
-                        caption_els = page.locator(cap_sel)
-                        if caption_els.count() > 0:
-                            for j in range(caption_els.count()):
-                                try:
-                                    full_cap = caption_els.nth(j).inner_text(timeout=200).strip()
-                                    if full_cap and full_cap not in seen_captions:
-                                        seen_captions.add(full_cap)
-                                        last_speech_time = time.time()
-                                        parts = full_cap.split(":", 1)
-                                        spk = parts[0].strip() if len(parts) > 1 else "Participant"
-                                        txt = parts[1].strip() if len(parts) > 1 else full_cap
-                                        now_sec = time.time() - start_ts
-                                        speech_segments.append({
-                                            "speaker_name": spk,
-                                            "text": txt,
-                                            "start_seconds": now_sec,
-                                            "end_seconds": now_sec + 3.0
-                                        })
-                                except Exception:
-                                    pass
+                # 8c. Alone detection: If in call for >30s and all human attendees have left
+                if in_call and (time.time() - in_call_start_ts) >= 30:
+                    is_alone = any(p in body_text for p in [
+                        "you're the only one here",
+                        "nobody else is here"
+                    ])
+                    # Only conclude alone if no human roster participants were ever discovered
+                    if is_alone and len(roster_participants) == 0:
+                        alone_consecutive_count += 1
+                        if alone_consecutive_count >= 15:  # ~30 consecutive seconds
+                            logger.info(f"[Teams Bot] All human participants left meeting #{meeting_id}. Concluding session.")
+                            completed_normally = True
                             break
+                    else:
+                        alone_consecutive_count = 0
+
+                # 9. Scrape participants if in call (sidebar roster + video stage tiles)
+                if in_call:
+                    try:
+                        roster_data = page.evaluate("""
+                            () => {
+                                const list = [];
+                                const seen = new Set();
+                                const botName = "ai meeting facilitator";
+
+                                function addName(rawName) {
+                                    if (!rawName) return;
+                                    let name = rawName.trim();
+                                    if (name.includes('\\n')) {
+                                        name = name.split('\\n')[0].trim();
+                                    }
+                                    name = name.replace(/\\s*\\((Organiser|Organizer|Presenter|Attendee|Guest|External|You|Me|IN|TPR)\\)/gi, '').trim();
+
+                                    if (/\\d/.test(name)) return;
+                                    if (/message|status|encrypt|setting|action|invite|search|meeting|record|caption|audio|video|device|roster|privacy|policy|leave|raise|react|people|presenter|call me|chat bubbles|gallery|full screen|background|format|emoji|send|discard|insert|link|unmuted|muted|camera|share|participants|options/i.test(name)) {
+                                        return;
+                                    }
+                                    if (name.length < 3 || name.length > 40) return;
+                                    const lower = name.toLowerCase();
+                                    if (lower === botName || seen.has(lower)) return;
+                                    seen.add(lower);
+                                    list.push(name);
+                                }
+
+                                // 1. Check inside Participants / In this meeting sidebar
+                                const candidatePanels = Array.from(document.querySelectorAll('div, aside, section, [role="complementary"]')).filter(el => {
+                                    const text = el.innerText || '';
+                                    return (text.includes('Participants') || text.includes('In this meeting')) && !el.closest('[role="menu"], .fui-MenuPopover');
+                                });
+                                for (const panel of candidatePanels) {
+                                    panel.querySelectorAll('[role="treeitem"], [role="listitem"], div[class*="participant"], div[class*="roster"], [data-tid*="roster-item"]').forEach(el => {
+                                        if (el.closest('[role="menu"], .fui-MenuPopover, [role="menubar"], nav')) return;
+                                        const nameEl = el.querySelector('[data-tid*="name"], span[dir="auto"], span[class*="name"], div[class*="name"]') || el;
+                                        let txt = (nameEl.innerText || '').trim();
+                                        if (txt) {
+                                            if (txt.includes('\\n')) txt = txt.split('\\n')[0].trim();
+                                            addName(txt);
+                                        }
+                                    });
+                                }
+
+                                // 2. Check video stage tiles and name badges
+                                document.querySelectorAll(
+                                    '[data-tid*="stream"], [data-tid*="participant"], [data-tid*="video-tile"], ' +
+                                    'div[class*="tile"], span[class*="name"], div[class*="name"], div[class*="badge"], ' +
+                                    'div[id*="tile-name"], [data-tid*="tile-name"], [data-tid*="name-badge"]'
+                                ).forEach(el => {
+                                    if (el.closest('[role="menu"], .fui-MenuPopover, [role="menubar"], nav, button, footer')) return;
+                                    let text = (el.innerText || "").trim();
+                                    if (text.includes('\\n')) text = text.split('\\n')[0].trim();
+                                    if (!text || text.length < 3) {
+                                        text = (el.getAttribute('title') || '').split(',')[0].trim();
+                                    }
+                                    addName(text);
+                                });
+
+                                return list;
+                            }
+                        """)
+                        for r_name in (roster_data or []):
+                            clean_n = r_name
+                            for att_n in (known_attendees or []):
+                                if att_n.lower() in clean_n.lower() or clean_n.lower() in att_n.lower():
+                                    clean_n = att_n
+                                    break
+                            if clean_n not in seen_names and clean_n.lower() not in SYSTEM_UI_WORDS and clean_n.lower() != bot_name.lower():
+                                seen_names.add(clean_n)
+                                roster_participants.append({
+                                    "name": clean_n,
+                                    "join_time": datetime.now(timezone.utc).isoformat()
+                                })
+                                logger.info(f"[Teams Bot] Discovered active participant: {clean_n}")
+                    except Exception as r_err:
+                        logger.debug(f"[Teams Bot] Roster scrape note: {r_err}")
+
+                # 10. Scrape live captions if in call and persist in real-time (Priority 1 speech capture)
+                if in_call:
+                    try:
+                        raw_captions = page.evaluate("""
+                            () => {
+                                const items = [];
+                                const seenTexts = new Set();
+
+                                function recordCaption(rawSpeaker, rawText) {
+                                    if (!rawText) return;
+                                    let text = rawText.trim();
+                                    let speaker = (rawSpeaker || 'Participant').trim();
+                                    
+                                    // Remove avatar noise or single letters
+                                    if (/^[A-Z0-9]{1,3}$/.test(speaker)) speaker = 'Participant';
+                                    
+                                    // Ensure text is not identical to speaker name
+                                    if (text.toLowerCase() === speaker.toLowerCase()) return;
+                                    if (text.length < 2) return;
+                                    
+                                    const key = speaker.toLowerCase() + ":::" + text.toLowerCase();
+                                    if (seenTexts.has(key)) return;
+                                    seenTexts.add(key);
+                                    items.push({ speaker: speaker, text: text });
+                                }
+
+                                // Strategy 1: Dedicated closed-caption message cards
+                                const chatCards = document.querySelectorAll(
+                                    '[data-tid="closed-caption-chat-message"], ' +
+                                    '[data-tid="closed-caption-v2-virtual-list-content"] > div, ' +
+                                    'div[class*="closed-caption-chat-message"], ' +
+                                    'div[data-tid="caption-item"]'
+                                );
+                                for (const card of chatCards) {
+                                    let speaker = '';
+                                    let text = '';
+                                    const authorEl = card.querySelector('.ui-chat__message__author, [class*="author"], [data-tid*="author"], span[dir="auto"], strong');
+                                    if (authorEl) speaker = (authorEl.innerText || '').trim();
+                                    const textEl = card.querySelector('[data-tid="closed-caption-text"], [class*="caption-text"]');
+                                    if (textEl) text = (textEl.innerText || '').trim();
+
+                                    if (!speaker || !text) {
+                                        const rawLines = (card.innerText || '').split('\\n').map(l => l.trim()).filter(l => l && !/^[A-Z]{1,3}$/.test(l));
+                                        if (rawLines.length >= 2) {
+                                            if (!speaker) speaker = rawLines[0];
+                                            if (!text) text = rawLines.slice(1).join(' ');
+                                        } else if (rawLines.length === 1 && !text) {
+                                            text = rawLines[0];
+                                        }
+                                    }
+                                    recordCaption(speaker, text);
+                                }
+
+                                // Strategy 2: Direct lookup of [data-tid="closed-caption-text"]
+                                if (items.length === 0) {
+                                    const textEls = document.querySelectorAll('[data-tid="closed-caption-text"]');
+                                    for (const tel of textEls) {
+                                        const txt = (tel.innerText || '').trim();
+                                        if (!txt) continue;
+                                        const parent = tel.closest('[data-tid="closed-caption-chat-message"], div[class*="caption"], div') || tel.parentElement;
+                                        let spk = 'Participant';
+                                        if (parent) {
+                                            const spkEl = parent.querySelector('.ui-chat__message__author, [class*="author"], [data-tid*="author"], span[dir="auto"], strong');
+                                            if (spkEl) spk = (spkEl.innerText || '').trim();
+                                        }
+                                        recordCaption(spk, txt);
+                                    }
+                                }
+
+                                // Strategy 3: Bottom Subtitle Container (Shown in Teams Web / Image 4 & 5)
+                                if (items.length === 0) {
+                                    const containers = Array.from(document.querySelectorAll(
+                                        '[data-tid="closed-captions-renderer"], ' +
+                                        '[data-tid="closed-caption-renderer-wrapper"], ' +
+                                        '[data-tid="closed-captions-container"], ' +
+                                        '[data-tid="closed-caption-v2-virtual-list-content"], ' +
+                                        '[data-tid*="caption"], ' +
+                                        'div[class*="closedCaptions"], ' +
+                                        'div[class*="closedCaption"], ' +
+                                        'div[class*="captionContainer"], ' +
+                                        'div[class*="caption-container"], ' +
+                                        'div[class*="closed-caption"], ' +
+                                        'div[aria-label*="caption" i], ' +
+                                        'section[aria-label*="caption" i]'
+                                    ));
+
+                                    // Also locate caption container by settings or close buttons
+                                    const captionCloseBtn = document.querySelector(
+                                        'button[aria-label*="Turn off live captions" i], ' +
+                                        'button[aria-label*="caption settings" i], ' +
+                                        'button[data-tid*="caption-settings"]'
+                                    );
+                                    if (captionCloseBtn) {
+                                        const bar = captionCloseBtn.closest('div[style*="position"], div[class*="caption"], div[class*="renderer"], div');
+                                        if (bar && !containers.includes(bar)) containers.push(bar);
+                                    }
+
+                                    for (const cont of containers) {
+                                        // First try child message cards inside container
+                                        const cards = cont.querySelectorAll(':scope > div, div[class*="item"], div[class*="card"], div[class*="message"], div[class*="row"]');
+                                        let parsedCards = false;
+                                        if (cards && cards.length > 0) {
+                                            for (const c of cards) {
+                                                const cLines = (c.innerText || '').split('\\n')
+                                                    .map(l => l.trim())
+                                                    .filter(l => l && !/^[A-Z0-9]{1,3}$/.test(l) && !/Turn off|Settings|Dismiss/i.test(l));
+                                                if (cLines.length >= 2) {
+                                                    recordCaption(cLines[0], cLines.slice(1).join(' '));
+                                                    parsedCards = true;
+                                                }
+                                            }
+                                        }
+
+                                        if (!parsedCards) {
+                                            const raw = (cont.innerText || '').trim();
+                                            if (!raw) continue;
+                                            // Split lines and filter out avatar initials (e.g. 'RT', 'DS') and buttons ('Settings', 'Turn off', 'X')
+                                            const lines = raw.split('\\n')
+                                                .map(l => l.trim())
+                                                .filter(l => l && !/^[A-Z0-9]{1,3}$/.test(l) && !/Turn off|Settings|Dismiss/i.test(l));
+                                            
+                                            // In Teams bottom bar, lines alternate between Speaker Name and Speech Text!
+                                            for (let i = 0; i < lines.length; i += 2) {
+                                                const spk = lines[i];
+                                                const msg = (i + 1 < lines.length) ? lines[i + 1] : '';
+                                                if (msg) {
+                                                    recordCaption(spk, msg);
+                                                } else if (spk && lines.length === 1) {
+                                                    recordCaption('Participant', spk);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Strategy 4: Live aria regions (aria-live="polite", aria-live="assertive")
+                                if (items.length === 0) {
+                                    const liveEls = document.querySelectorAll('div[aria-live="polite"] span, div[aria-live="assertive"] span, [role="log"]');
+                                    for (const le of liveEls) {
+                                        const txt = (le.innerText || '').trim();
+                                        if (txt && txt.length > 2 && !/Turn off|Settings|Dismiss/i.test(txt)) {
+                                            recordCaption('Participant', txt);
+                                        }
+                                    }
+                                }
+
+                                return items;
+                            }
+                        """)
+
+                        if raw_captions:
+                            now_sec = round(time.time() - start_ts, 1)
+                            for cap_item in raw_captions:
+                                raw_spk = (cap_item.get("speaker") or "Participant").strip()
+                                speech_txt = (cap_item.get("text") or "").strip()
+                                if not speech_txt:
+                                    continue
+
+                                # Unique key for de-duplicating seen captions
+                                cap_key = f"{raw_spk.lower()}:{speech_txt.lower()}"
+                                if cap_key in seen_captions:
+                                    continue
+                                seen_captions.add(cap_key)
+
+                                # Normalize speaker name
+                                clean_speaker = re.sub(
+                                    r'\s*\((?:IN|TPR|Guest|Organizer|Organiser|Presenter|Attendee|You|Me)\)',
+                                    '', raw_spk, flags=re.I
+                                ).strip()
+
+                                # Match with known attendees (e.g. "Deepak Saha", "Reetick Maity")
+                                for att_n in (known_attendees or []):
+                                    if att_n.lower() in clean_speaker.lower() or clean_speaker.lower() in att_n.lower():
+                                        clean_speaker = att_n
+                                        break
+                                speaker = clean_speaker or "Participant"
+
+                                # Register speaker in roster so attendance is marked present
+                                if speaker not in seen_names and speaker.lower() not in SYSTEM_UI_WORDS and speaker.lower() != bot_name.lower():
+                                    seen_names.add(speaker)
+                                    roster_participants.append({
+                                        "name": speaker,
+                                        "join_time": datetime.now(timezone.utc).isoformat()
+                                    })
+                                    logger.info(f"[Teams Bot] Verified active speaker for attendance: {speaker}")
+
+                                seg = {
+                                    "speaker_name": speaker,
+                                    "text": speech_txt,
+                                    "start_seconds": now_sec,
+                                    "end_seconds": now_sec + 3.0
+                                }
+                                speech_segments.append(seg)
+
+                                # Real-time database persistence
+                                try:
+                                    execute_write(
+                                        """INSERT INTO meeting_transcripts (meeting_id, speaker_name, text, start_seconds, end_seconds)
+                                           VALUES (%s, %s, %s, %s, %s)""",
+                                        (meeting_id, speaker, speech_txt, now_sec, now_sec + 3.0)
+                                    )
+                                    logger.info(f"[Live Captions] #{meeting_id} [{speaker}]: \"{speech_txt[:60]}\"")
+                                except Exception as db_err:
+                                    logger.debug(f"Live transcript insert error: {db_err}")
+
+                    except Exception as cap_err:
+                        logger.debug(f"[Teams Bot] Caption scrape error: {cap_err}")
 
             except Exception as loop_err:
                 logger.debug(f"[Teams Bot] Telemetry loop error: {loop_err}")
 
-        # If call lasted >60 seconds or in-call was reached, mark completed
         call_duration = time.time() - start_ts
-        if (in_call or has_ever_joined_call) and (completed_normally or call_duration >= 60 or len(speech_segments) > 0 or len(roster_participants) > 0):
+        if (in_call or has_ever_joined_call) and (completed_normally or call_duration >= 30 or len(speech_segments) > 0 or len(roster_participants) > 0):
             completed_normally = True
 
         return roster_participants, speech_segments, completed_normally
 
     @classmethod
-    def _run_google_meet_session(cls, page, meeting_id: int, stop_event: threading.Event) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+    def _run_google_meet_session(
+        cls,
+        page,
+        meeting_id: int,
+        stop_event: threading.Event,
+        roster_participants: Optional[List[Dict[str, Any]]] = None,
+        speech_segments: Optional[List[Dict[str, Any]]] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
         """Automates Google Meet join, people panel scraping, and captions."""
         logger.info(f"[Google Meet Bot] Starting session for meeting #{meeting_id}...")
         bot_name = Config.BOT_NAME
-        roster_participants: List[Dict[str, Any]] = []
-        speech_segments: List[Dict[str, Any]] = []
+        if roster_participants is None:
+            roster_participants = []
+        if speech_segments is None:
+            speech_segments = []
         seen_captions: Set[str] = set()
         seen_names: Set[str] = set()
         start_ts = time.time()
         in_call = False
         completed_normally = False
-        gm_alone_since = None
+        captions_enabled = False
+        people_opened = False
 
-        # Step 1: Pre-join
-        time.sleep(3)
-        try:
-            name_input = page.locator('input[aria-label="Your name"], input[placeholder="Your name"]')
-            if name_input.count() > 0:
-                name_input.first.fill(bot_name)
-                time.sleep(0.5)
+        # Step 1: Pre-join (wait up to 30s for prejoin controls)
+        for _ in range(15):
+            if stop_event.is_set():
+                return roster_participants, speech_segments, False
+            time.sleep(1)
+            try:
+                name_input = page.locator('input[aria-label="Your name"], input[placeholder="Your name"]')
+                if name_input.count() > 0 and name_input.first.is_visible(timeout=300):
+                    name_input.first.fill(bot_name)
+                    time.sleep(0.5)
 
-            # Mute camera & mic
-            page.keyboard.press("Control+e")
-            time.sleep(0.2)
-            page.keyboard.press("Control+d")
-            time.sleep(0.5)
+                # Mute camera & mic
+                page.keyboard.press("Control+e")
+                time.sleep(0.2)
+                page.keyboard.press("Control+d")
+                time.sleep(0.3)
 
-            # Click Join / Ask to join
-            join_btn = page.locator('button:has-text("Ask to join"), button:has-text("Join now")')
-            if join_btn.count() > 0:
-                join_btn.first.click()
-                time.sleep(4)
-                in_call = True
-                execute_write("UPDATE scheduled_bot_jobs SET status = 'IN_CALL' WHERE meeting_id = %s", (meeting_id,))
-
-            # Turn on Captions ('c')
-            page.keyboard.press("c")
-            time.sleep(0.5)
-
-            # Open people panel
-            people_btn = page.locator('button[aria-label*="People" i], button[aria-label*="participants" i]')
-            if people_btn.count() > 0:
-                people_btn.first.click()
-                time.sleep(1)
-
-        except Exception as prejoin_err:
-            logger.warning(f"[Google Meet Bot] Prejoin error: {prejoin_err}")
+                # Click Join / Ask to join
+                join_btn = page.locator('button:has-text("Ask to join"), button:has-text("Join now")')
+                if join_btn.count() > 0 and join_btn.first.is_visible(timeout=300):
+                    join_btn.first.click()
+                    time.sleep(3)
+                    # Check if directly in call or waiting to be let in
+                    leave_chk = page.locator('button[aria-label*="Leave call" i]')
+                    if leave_chk.count() > 0 and leave_chk.first.is_visible(timeout=500):
+                        in_call = True
+                        execute_write("UPDATE scheduled_bot_jobs SET status = 'IN_CALL' WHERE meeting_id = %s", (meeting_id,))
+                    break
+            except Exception as prejoin_err:
+                logger.debug(f"[Google Meet Bot] Prejoin step note: {prejoin_err}")
 
         # Step 2: Monitoring Loop
+        logger.info(f"[Google Meet Bot] Entering monitoring loop for meeting #{meeting_id}...")
+        max_duration_seconds = 14400
+
         while not stop_event.is_set():
             time.sleep(2)
             try:
+                if (time.time() - start_ts) > max_duration_seconds:
+                    logger.info(f"[Google Meet Bot] Maximum duration reached for meeting #{meeting_id}.")
+                    completed_normally = True
+                    break
+
                 body_text = page.locator("body").inner_text(timeout=500).lower()
                 if any(p in body_text for p in [
                     "you left the meeting",
@@ -710,53 +1131,154 @@ class BrowserMeetingBot:
                         completed_normally = False
                     break
 
-                # Auto-conclude when all attendees have left Google Meet
-                gm_empty_phrases = ["you're the only one here", "everyone else left", "you are the only one here", "waiting for others"]
-                gm_is_empty_text = any(p in body_text for p in gm_empty_phrases)
-                gm_p_items = page.locator('div[aria-label*="People" i] [role="listitem"]')
-                gm_active_count = gm_p_items.count() if gm_p_items.count() > 0 else 0
-
-                if in_call and (gm_is_empty_text or (len(seen_names) > 0 and gm_active_count <= 1)):
-                    if gm_alone_since is None:
-                        gm_alone_since = time.time()
-                    elif time.time() - gm_alone_since >= 10:
-                        logger.info(f"[Google Meet Bot] All attendees have left meeting #{meeting_id}. Auto-leaving.")
+                # Check if in call controls appeared
+                leave_btn = page.locator('button[aria-label*="Leave call" i]')
+                if leave_btn.count() > 0:
+                    if not in_call:
+                        in_call = True
                         try:
-                            page.locator('button[aria-label*="Leave call" i]').first.click()
+                            execute_write("UPDATE scheduled_bot_jobs SET status = 'IN_CALL' WHERE meeting_id = %s", (meeting_id,))
                         except Exception:
                             pass
-                        completed_normally = True
-                        break
-                else:
-                    gm_alone_since = None
 
-                # Scrape participants
-                p_items = page.locator('div[role="listitem"]')
-                for i in range(p_items.count()):
+                # Turn on Captions: Try 3 dots (More options) -> 'Captions', or toolbar CC button, or 'c'
+                if in_call and not captions_enabled:
                     try:
-                        p_name = p_items.nth(i).locator('span').first.inner_text().strip()
-                        if p_name and p_name != bot_name and p_name not in seen_names:
-                            seen_names.add(p_name)
-                            roster_participants.append({
-                                "name": p_name,
-                                "join_time": datetime.now(timezone.utc).isoformat()
-                            })
+                        # 1. Try 3 dots (More options)
+                        more_btn = None
+                        for m_sel in [
+                            'button[aria-label*="More options" i]',
+                            'button[data-tooltip*="More options" i]',
+                            'button[aria-label*="More actions" i]',
+                            'button[jsname="A5il2e"]'
+                        ]:
+                            b = page.locator(m_sel)
+                            if b.count() > 0 and b.first.is_visible(timeout=200):
+                                more_btn = b.first
+                                break
+
+                        if more_btn:
+                            more_btn.click(timeout=500)
+                            time.sleep(0.5)
+                            cap_item = page.locator('[role="menuitem"]:has-text("Captions"), [role="menuitem"]:has-text("Turn on captions"), span:has-text("Captions")')
+                            if cap_item.count() > 0 and cap_item.first.is_visible(timeout=300):
+                                cap_item.first.click()
+                                captions_enabled = True
+                                logger.info(f"[Google Meet Bot] Clicked 'Captions' in 3-dots menu for meeting #{meeting_id}.")
+                                time.sleep(0.5)
+                            else:
+                                page.keyboard.press("Escape")
+
+                        # 2. Direct toolbar CC button fallback
+                        if not captions_enabled:
+                            for cc_sel in [
+                                'button[aria-label*="Turn on captions" i]',
+                                'button[data-tooltip*="Turn on captions" i]',
+                                'button[aria-label*="captions" i]',
+                                'button[jsname="r8qRAd"]'
+                            ]:
+                                cb = page.locator(cc_sel)
+                                if cb.count() > 0 and cb.first.is_visible(timeout=200):
+                                    cb.first.click()
+                                    captions_enabled = True
+                                    logger.info(f"[Google Meet Bot] Clicked toolbar CC button for meeting #{meeting_id}.")
+                                    break
+
+                        # 3. Keyboard shortcut 'c' fallback
+                        if not captions_enabled:
+                            page.locator("body").focus()
+                            page.keyboard.press("c")
+                            captions_enabled = True
+                            logger.info(f"[Google Meet Bot] Sent 'c' to enable live captions for meeting #{meeting_id}.")
+
+                        # 4. Spoken language dialog confirmation if shown
+                        for cf_sel in ['button:has-text("Apply")', 'button:has-text("Turn on")', 'button:has-text("Done")']:
+                            cf = page.locator(cf_sel)
+                            if cf.count() > 0 and cf.first.is_visible(timeout=200):
+                                cf.first.click()
+                                break
+                    except Exception as cap_err:
+                        logger.debug(f"[Google Meet Bot] Caption toggle note: {cap_err}")
+
+                # Open people panel once in call
+                if in_call and not people_opened:
+                    try:
+                        people_btn = page.locator('button[aria-label*="People" i], button[aria-label*="participants" i]')
+                        if people_btn.count() > 0 and people_btn.first.is_visible(timeout=300):
+                            people_btn.first.click()
+                            people_opened = True
+                            time.sleep(1)
                     except Exception:
                         pass
 
+                # Scrape participants
+                if in_call:
+                    p_items = page.locator('div[aria-label*="People" i] [role="listitem"], div[role="listitem"]')
+                    for i in range(min(p_items.count(), 30)):
+                        try:
+                            p_el = p_items.nth(i)
+                            span_el = p_el.locator('span').first
+                            p_name = span_el.inner_text(timeout=100).strip() if span_el.count() > 0 else ""
+                            if p_name and p_name != bot_name and len(p_name) > 2 and p_name not in seen_names:
+                                seen_names.add(p_name)
+                                roster_participants.append({
+                                    "name": p_name,
+                                    "join_time": datetime.now(timezone.utc).isoformat()
+                                })
+                                logger.info(f"[Google Meet Bot] Discovered participant: {p_name}")
+                        except Exception:
+                            pass
+
                 # Scrape captions
-                cap_container = page.locator('div[class*="caption"], div[class*="Captions"]')
-                if cap_container.count() > 0:
-                    cap_text = cap_container.first.inner_text().strip()
-                    if cap_text and cap_text not in seen_captions:
-                        seen_captions.add(cap_text)
-                        now_sec = time.time() - start_ts
-                        speech_segments.append({
-                            "speaker_name": "Participant",
-                            "text": cap_text,
-                            "start_seconds": now_sec,
-                            "end_seconds": now_sec + 3.0
-                        })
+                if in_call:
+                    cap_containers = page.locator('div[jsname="YSgAZ"], div[class*="caption"], div[class*="Captions"], div[class*="bh44bd"]')
+                    if cap_containers.count() > 0:
+                        for k in range(cap_containers.count()):
+                            try:
+                                cap_el = cap_containers.nth(k)
+                                cap_text = cap_el.inner_text(timeout=100).strip()
+                                if cap_text and cap_text not in seen_captions:
+                                    seen_captions.add(cap_text)
+                                    now_sec = round(time.time() - start_ts, 1)
+
+                                    speaker = "Participant"
+                                    try:
+                                        spk_el = cap_el.locator('span[class*="speaker"], div[class*="speaker"], div[class*="zsT0G"]')
+                                        if spk_el.count() > 0:
+                                            s_t = spk_el.first.inner_text(timeout=100).strip()
+                                            if s_t:
+                                                speaker = s_t
+                                                if cap_text.startswith(s_t):
+                                                    cap_text = cap_text[len(s_t):].lstrip(":").strip()
+                                    except Exception:
+                                        pass
+
+                                    if speaker == "Participant" and ":" in cap_text:
+                                        parts = cap_text.split(":", 1)
+                                        if len(parts[0].strip()) < 40:
+                                            speaker = parts[0].strip()
+                                            cap_text = parts[1].strip()
+
+                                    seg = {
+                                        "speaker_name": speaker,
+                                        "text": cap_text,
+                                        "start_seconds": now_sec,
+                                        "end_seconds": now_sec + 3.0
+                                    }
+                                    speech_segments.append(seg)
+
+                                    try:
+                                        execute_write(
+                                            """INSERT INTO meeting_transcripts (meeting_id, speaker_name, text, start_seconds, end_seconds)
+                                               VALUES (%s, %s, %s, %s, %s)""",
+                                            (meeting_id, speaker, cap_text, now_sec, now_sec + 3.0)
+                                        )
+                                    except Exception as db_err:
+                                        logger.debug(f"Live transcript insert error: {db_err}")
+
+                                    logger.info(f"[Live Speech] #{meeting_id} {speaker}: \"{cap_text[:60]}\"")
+                            except Exception:
+                                pass
 
             except Exception as meet_err:
                 logger.debug(f"[Google Meet Bot] Monitoring note: {meet_err}")

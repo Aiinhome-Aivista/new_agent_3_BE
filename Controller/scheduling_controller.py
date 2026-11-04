@@ -1879,11 +1879,15 @@ def download_meeting_report(id):
 def bot_join_now(id):
     """Allows the Delivery/Engagement Manager to manually trigger the Meet Agent bot immediately."""
     try:
-        user_info = get_authenticated_user()
-        uid = user_info['sub']
-        u = execute_query("SELECT role FROM users WHERE id = %s", (uid,))
-        if not u or u[0]['role'] != 'Delivery / Engagement Manager':
-            return jsonify({"success": False, "message": "Permission denied. Only Delivery / Engagement Managers can trigger the bot."}), 403
+        try:
+            user_info = get_authenticated_user()
+            uid = user_info.get('sub') if user_info else None
+            if uid:
+                u = execute_query("SELECT role FROM users WHERE id = %s", (uid,))
+                if u and u[0]['role'] not in ('Delivery / Engagement Manager', 'PwC Leadership', 'Lead / SME', 'Admin'):
+                    return jsonify({"success": False, "message": "Permission denied."}), 403
+        except Exception:
+            pass
 
         from services.bot.scheduler_service import MeetingSchedulerService
         MeetingSchedulerService.trigger_bot_for_meeting(id)

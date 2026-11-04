@@ -174,11 +174,16 @@ class MeetingSchedulerService:
                 logger.info(f"Meeting #{meeting_id} is already '{meeting.get('status')}'. Bot will not join.")
                 return
 
-            # Check if job is already in progress or completed
+            # Check if job is completed or already actively running in a background thread
             job_rows = execute_query("SELECT status FROM scheduled_bot_jobs WHERE meeting_id = %s", (meeting_id,))
-            if job_rows and job_rows[0].get("status") in ("JOINING", "IN_CALL", "COMPLETED"):
-                logger.info(f"Meeting #{meeting_id} bot job is already '{job_rows[0].get('status')}'. Skipping trigger.")
-                return
+            if job_rows:
+                j_status = job_rows[0].get("status")
+                if j_status == "COMPLETED":
+                    logger.info(f"Meeting #{meeting_id} bot job is already 'COMPLETED'. Skipping trigger.")
+                    return
+                if j_status in ("JOINING", "IN_CALL") and BrowserMeetingBot.is_active(meeting_id):
+                    logger.info(f"Meeting #{meeting_id} bot job is already actively '{j_status}'. Skipping duplicate trigger.")
+                    return
 
             link = (meeting.get("meeting_link") or "").strip()
             if not link:
@@ -202,8 +207,6 @@ class MeetingSchedulerService:
         """Fail-safe poller that checks for any meetings starting right now that were not yet triggered."""
         try:
             now = datetime.now()
-            # Safety poller should only catch meetings that are currently due or missed (within the last 10 minutes)
-            # Future meetings are handled by APScheduler DateTrigger with pre-join lead time.
             threshold_start = now - timedelta(minutes=10)
             threshold_end = now
 
@@ -273,4 +276,3 @@ class MeetingSchedulerService:
             from dateutil import parser
             return parser.parse(dt_str)
         return datetime.now()
-

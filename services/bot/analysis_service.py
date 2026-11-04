@@ -44,22 +44,25 @@ class AnalysisEngine:
         plan_id = meeting.get("plan_id")
         meeting_title = meeting.get("title", f"Meeting #{meeting_id}")
 
-        # 2. Persist transcript segments if provided
+        # 2. Persist transcript segments if provided and not already stored
         if speech_segments:
-            for seg in speech_segments:
-                try:
-                    spk = seg.get("speaker_name") or seg.get("speaker") or "Participant"
-                    txt = seg.get("text", "").strip()
-                    st = float(seg.get("start_seconds", 0.0))
-                    et = float(seg.get("end_seconds", st + 5.0))
-                    if txt:
-                        execute_write(
-                            """INSERT INTO meeting_transcripts (meeting_id, speaker_name, text, start_seconds, end_seconds)
-                               VALUES (%s, %s, %s, %s, %s)""",
-                            (meeting_id, spk, txt, st, et)
-                        )
-                except Exception as t_err:
-                    logger.debug(f"Transcript segment insert note: {t_err}")
+            existing_cnt = execute_query("SELECT COUNT(*) as cnt FROM meeting_transcripts WHERE meeting_id = %s", (meeting_id,))
+            has_db_segments = existing_cnt and existing_cnt[0]["cnt"] > 0
+            if not has_db_segments:
+                for seg in speech_segments:
+                    try:
+                        spk = seg.get("speaker_name") or seg.get("speaker") or "Participant"
+                        txt = seg.get("text", "").strip()
+                        st = float(seg.get("start_seconds", 0.0))
+                        et = float(seg.get("end_seconds", st + 5.0))
+                        if txt:
+                            execute_write(
+                                """INSERT INTO meeting_transcripts (meeting_id, speaker_name, text, start_seconds, end_seconds)
+                                   VALUES (%s, %s, %s, %s, %s)""",
+                                (meeting_id, spk, txt, st, et)
+                            )
+                    except Exception as t_err:
+                        logger.debug(f"Transcript segment insert note: {t_err}")
 
         # Fetch all transcripts for this meeting from DB
         db_segments = execute_query(
@@ -130,13 +133,21 @@ class AnalysisEngine:
             if sh_name in detected_names:
                 matched = True
             else:
+                first_name = sh_name.split()[0] if sh_name else ""
+                last_name = sh_name.split()[-1] if len(sh_name.split()) > 1 else ""
                 for dn in detected_names:
                     if len(sh_name) > 3 and (sh_name in dn or dn in sh_name):
                         matched = True
                         break
+                    if len(first_name) >= 3 and first_name in dn:
+                        matched = True
+                        break
+                    if len(last_name) >= 4 and last_name in dn:
+                        matched = True
+                        break
 
-            # If matched or if session ran to completion without side-panel roster
-            if matched or len(attendees) == 1 or len(detected_names) == 0:
+            # Only mark present if matched in roster, stage tiles, or live speech
+            if matched:
                 spk_data = speaker_stats.get(att.get("name"), {})
                 tt_str = spk_data.get("talk_time_formatted", "Joined Call")
                 note = f"Verified by AI Meeting Bot ({tt_str})"
@@ -149,15 +160,13 @@ class AnalysisEngine:
                 except Exception as att_upd_err:
                     logger.warning(f"Error updating attendance #{att['attendance_id']}: {att_upd_err}")
             else:
-                # If participants were detected but this stakeholder was not
-                if len(detected_names) > 0:
-                    try:
-                        execute_write(
-                            "UPDATE attendance SET attended = 0, notes = %s WHERE id = %s",
-                            ("Absent - Not detected in call roster", att["attendance_id"])
-                        )
-                    except Exception:
-                        pass
+                try:
+                    execute_write(
+                        "UPDATE attendance SET attended = 0, notes = %s WHERE id = %s",
+                        ("Absent - Not detected in call roster", att["attendance_id"])
+                    )
+                except Exception as att_abs_err:
+                    logger.warning(f"Error marking absent #{att['attendance_id']}: {att_abs_err}")
 
         logger.info(f"Attendance marked for Meeting #{meeting_id}: {marked_count}/{len(attendees)} attendees verified present.")
 
@@ -284,7 +293,6 @@ class AnalysisEngine:
         # 8. Update Topic Completion Tracking if plan has topics
         try:
             if plan_id:
-                # Find matching topics for this day/meeting
                 topics = execute_query(
                     "SELECT topic_name FROM plan_topics WHERE plan_id = %s",
                     (plan_id,)
@@ -421,7 +429,6 @@ Only output valid JSON. Do not include markdown code block syntax if possible.""
         try:
             return json.loads(cleaned)
         except Exception:
-            # Try regex match for outer { ... }
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if match:
                 try:
@@ -429,4 +436,3 @@ Only output valid JSON. Do not include markdown code block syntax if possible.""
                 except Exception:
                     pass
         return None
-
