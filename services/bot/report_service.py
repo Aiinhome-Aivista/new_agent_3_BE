@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -326,24 +327,124 @@ class ReportService:
             elements.append(q_table)
             elements.append(Spacer(1, 12))
 
-        # Full Meeting Conversation Transcript
+        # Full Meeting Conversation Transcript (Clean, consolidated human dialogue)
         transcripts = execute_query(
             "SELECT speaker_name, text, start_seconds, end_seconds FROM meeting_transcripts WHERE meeting_id = %s ORDER BY start_seconds ASC, id ASC",
             (meeting_id,)
         )
         elements.append(Paragraph("Full Meeting Conversation Transcript", h2_style))
         if transcripts:
+            # Consolidate adjacent speech turns and filter out streaming prefix loops and duplicate Participant noise
+            INVALID_SPEAKERS = {
+                "icon", "some", "no", "so", "the", "a", "an", "and", "or", "in", "on", "at", "to",
+                "for", "with", "by", "about", "status", "action", "meeting", "caption", "captions"
+            }
+            known_attendee_names = {a["name"].strip().lower() for a in attendance_records if a.get("name")}
+
+            raw_turns = []
+            for tr in transcripts:
+                spk = (tr.get("speaker_name") or "Participant").strip()
+                txt = (tr.get("text") or "").strip()
+                sec = float(tr.get("start_seconds") or 0.0)
+                end_sec = float(tr.get("end_seconds") or (sec + 3.0))
+
+                if not txt or len(txt) < 2:
+                    continue
+                if spk.lower() in INVALID_SPEAKERS:
+                    continue
+                if re.match(r"^Captions are turned on\b", txt, re.IGNORECASE) or txt.lower() in ("captions", "caption"):
+                    continue
+
+                # Ignore artifacts where text is just someone's name without dialogue
+                norm_txt_lower = re.sub(r'\s*\([^)]*\)', '', txt).strip().lower()
+                if norm_txt_lower in known_attendee_names:
+                    continue
+
+                # Clean role decorations e.g. (Organizer)
+                spk_clean = re.sub(r'\s*\((Organiser|Organizer|Presenter|Attendee|Guest|External|You|Me|IN|TPR)\)', '', spk, flags=re.IGNORECASE).strip()
+                if spk_clean.islower() or spk_clean.isupper():
+                    spk_clean = spk_clean.title()
+
+                raw_turns.append({
+                    "speaker": spk_clean,
+                    "text": txt,
+                    "start_sec": sec,
+                    "end_sec": end_sec
+                })
+
+            consolidated_dialogue = []
+            for turn in raw_turns:
+                spk = turn["speaker"]
+                txt = turn["text"]
+                sec = turn["start_sec"]
+                end_sec = turn["end_sec"]
+
+                if not consolidated_dialogue:
+                    consolidated_dialogue.append(turn)
+                    continue
+
+                prev = consolidated_dialogue[-1]
+                norm_curr = re.sub(r'[^\w\s]', '', txt).strip().lower()
+                norm_prev = re.sub(r'[^\w\s]', '', prev["text"]).strip().lower()
+
+                # If previous was generic Participant and current has actual speaker name for same phrase
+                if prev["speaker"].lower() == "participant" and spk.lower() != "participant":
+                    if norm_curr == norm_prev or norm_curr.startswith(norm_prev) or norm_prev in norm_curr:
+                        prev["speaker"] = spk
+                        prev["text"] = txt
+                        prev["end_sec"] = end_sec
+                        continue
+
+                # If current is generic Participant but previous already has the real speaker
+                if spk.lower() == "participant" and prev["speaker"].lower() != "participant":
+                    if norm_curr == norm_prev or norm_prev.startswith(norm_curr) or norm_curr in norm_prev:
+                        continue
+                    if norm_curr.startswith(norm_prev):
+                        prev["text"] = txt
+                        prev["end_sec"] = end_sec
+                        continue
+
+                # Same speaker continuation / expansion
+                if prev["speaker"].lower() == spk.lower():
+                    if norm_curr == norm_prev or norm_prev.endswith(norm_curr):
+                        continue
+                    if norm_curr.startswith(norm_prev):
+                        prev["text"] = txt
+                        prev["end_sec"] = end_sec
+                        continue
+                    if norm_prev.startswith(norm_curr):
+                        continue
+
+                    # Check if last sentence in prev is being streamed/expanded
+                    prev_sentences = [s.strip() for s in re.split(r'[.!?]+', prev["text"]) if s.strip()]
+                    if prev_sentences:
+                        last_sent = prev_sentences[-1]
+                        norm_last = re.sub(r'[^\w\s]', '', last_sent).strip().lower()
+                        if norm_curr.startswith(norm_last) and len(norm_last) > 3:
+                            prefix_part = prev["text"][:prev["text"].rfind(last_sent)].rstrip()
+                            if prefix_part:
+                                prev["text"] = prefix_part + " " + txt
+                            else:
+                                prev["text"] = txt
+                            prev["end_sec"] = end_sec
+                            continue
+
+                    # If spoken closely within 6s, append into same cohesive speech turn
+                    if (sec - prev["end_sec"]) < 6.0:
+                        prev["text"] = prev["text"].rstrip(". ") + ". " + txt
+                        prev["end_sec"] = end_sec
+                        continue
+
+                consolidated_dialogue.append(turn)
+
             tr_headers = ["Time", "Speaker", "Transcript Dialogue"]
             tr_rows = [[Paragraph(f"<b>{h}</b>", cell_header_style) for h in tr_headers]]
-            for tr in transcripts:
-                sec = tr.get("start_seconds") or 0.0
-                time_str = format_seconds_to_time(sec)
-                spk = tr.get("speaker_name") or "Participant"
-                text_content = tr.get("text") or ""
+            for c in consolidated_dialogue:
+                time_str = format_seconds_to_time(c["start_sec"])
                 tr_rows.append([
                     Paragraph(f"<font color='#64748b'><b>[{time_str}]</b></font>", body_style),
-                    Paragraph(f"<b>{spk}</b>", body_style),
-                    Paragraph(text_content, body_style)
+                    Paragraph(f"<b>{c['speaker']}</b>", body_style),
+                    Paragraph(c['text'], body_style)
                 ])
             tr_table = Table(tr_rows, colWidths=[60, 110, 334])
             tr_table.setStyle(TableStyle([

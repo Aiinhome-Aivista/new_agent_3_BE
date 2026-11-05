@@ -1127,11 +1127,15 @@ def reschedule_meeting(id):
                 msg = "Rescheduled successfully. Some meeting times were adjusted to prevent overlaps. Participants notified."
         else:
             final_dt = final_proposed_meetings[0][1]
+            print(f"\n[MEETING RESCHEDULED] Meeting #{id} successfully rescheduled to {final_dt.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+            if reason:
+                print(f"                      Reason: {reason}", flush=True)
+            print(f"                      Dispatching email notifications to attendees...", flush=True)
             try:
                 from services.notification_service import trigger_reschedule_notifications
                 trigger_reschedule_notifications(id, final_dt, reason)
             except Exception as notify_err:
-                print(f"Error triggering reschedule notifications: {notify_err}")
+                print(f"Error triggering reschedule notifications: {notify_err}", flush=True)
             msg = f"Meeting rescheduled to {final_dt.strftime('%Y-%m-%d %H:%M')}. Participants will be notified via email."
             if time_was_adjusted:
                 msg = f"Meeting time adjusted to {final_dt.strftime('%Y-%m-%d %H:%M')} to prevent overlap. Participants notified."
@@ -1828,13 +1832,21 @@ def get_meeting_intelligence(id):
         trans_q = "SELECT speaker_name, text, start_seconds, end_seconds FROM meeting_transcripts WHERE meeting_id = %s ORDER BY start_seconds ASC, id ASC"
         trans_rows = execute_query(trans_q, (id,))
 
+        # Fetch registered attendees count
+        att_cnt_q = "SELECT COUNT(*) as total_att, SUM(CASE WHEN attended = 1 THEN 1 ELSE 0 END) as present_att FROM attendance WHERE meeting_id = %s"
+        att_stat = execute_query(att_cnt_q, (id,))
+        total_attendees = att_stat[0]["total_att"] if att_stat and att_stat[0]["total_att"] else 3
+        present_attendees = att_stat[0]["present_att"] if att_stat and att_stat[0]["present_att"] else 0
+
         return jsonify({
             "success": True,
             "data": {
                 "meeting_id": id,
                 "executive_summary": intel.get("executive_summary") or "",
                 "total_duration_seconds": intel.get("total_duration_seconds") or 0,
-                "total_speakers": intel.get("total_speakers") or 0,
+                "total_attendees": total_attendees,
+                "present_attendees": present_attendees,
+                "total_speakers": total_attendees,
                 "total_words": intel.get("total_words") or 0,
                 "dominant_speaker": intel.get("dominant_speaker"),
                 "questions": qa_rows or [],

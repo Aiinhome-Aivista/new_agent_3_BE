@@ -32,6 +32,10 @@ def create_app():
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
+    # Silence noisy background polling and HTTP access logs for clean terminal readability
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    
     # Enable CORS
     CORS(app, resources={r"/api/*": {"origins": ["http://localhost:5173", "http://localhost:5174", "http://187.127.163.17:3013"]}})
     

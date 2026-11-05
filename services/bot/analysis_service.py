@@ -17,7 +17,8 @@ class AnalysisEngine:
         cls,
         meeting_id: int,
         roster_participants: Optional[List[Dict[str, Any]]] = None,
-        speech_segments: Optional[List[Dict[str, Any]]] = None
+        speech_segments: Optional[List[Dict[str, Any]]] = None,
+        actual_duration_seconds: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Executes the end-to-end post-meeting analysis pipeline:
@@ -217,6 +218,28 @@ class AnalysisEngine:
                         (meeting_id, d.strip())
                     )
 
+            # Determine dynamic session duration:
+            # 1. Use actual measured in-call duration from bot session if provided.
+            # 2. Otherwise calculate timestamp span from first to last transcript segment.
+            # 3. Fallback to total speech talk time.
+            if actual_duration_seconds is not None and actual_duration_seconds > 0:
+                final_duration = int(round(actual_duration_seconds))
+            elif db_segments:
+                seg_start = min((float(s.get("start_seconds") or 0.0) for s in db_segments), default=0.0)
+                seg_end = max((float(s.get("end_seconds") or 0.0) for s in db_segments), default=0.0)
+                seg_span = seg_end - seg_start
+                final_duration = int(round(seg_span)) if seg_span > 0 else int(round(total_talk_time))
+            else:
+                final_duration = int(round(total_talk_time))
+
+            # Calculate verified human speaker count (only real names, not Participant, not bot)
+            valid_speakers = [
+                spk for spk in speaker_stats.keys()
+                if spk.lower() not in ("participant", "unknown", "ai meeting facilitator", "bot")
+                and len(spk.split()) >= 2
+            ]
+            total_speakers_count = len(valid_speakers) if valid_speakers else (1 if speaker_stats else len(attendees))
+
             # Insert Meeting Intelligence Record
             exec_summary = llm_data.get("executive_summary") or f"Knowledge Transfer session concluded covering planned topics for {meeting_title}."
             execute_write(
@@ -226,9 +249,9 @@ class AnalysisEngine:
                 (
                     meeting_id,
                     exec_summary,
-                    len(speaker_stats),
+                    total_speakers_count,
                     total_words,
-                    int(round(total_talk_time)),
+                    final_duration,
                     dominant_speaker,
                     max(0, len(attendees) - marked_count),
                     json.dumps(llm_data)

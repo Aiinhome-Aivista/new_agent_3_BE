@@ -742,8 +742,10 @@ END:VCALENDAR"""
             success = EmailService.send_html_email(email, subject, html_content, ics_content=ics_content)
             if success:
                 logger.info(f"Reschedule Email Sent: Meeting ID = {meeting_id}, Recipient = {email}")
+                print(f"[EMAIL NOTIFICATION] Reschedule email successfully sent to {name} <{email}> for Meeting #{meeting_id}", flush=True)
             else:
                 logger.error(f"Reschedule Email Failed: Meeting ID = {meeting_id}, Recipient = {email}")
+                print(f"[EMAIL NOTIFICATION ERROR] Failed to send reschedule email to {name} <{email}> for Meeting #{meeting_id}", flush=True)
 
     except Exception as e:
         logger.error(f"Reschedule Notification Service error for meeting {meeting_id}: {e}")
