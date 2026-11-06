@@ -28,7 +28,7 @@ def generate_teams_meeting_link(subject="Dynamic Open Meeting Room"):
     from config import Config
     link_type = (getattr(Config, 'TEAMS_MEETING_LINK_TYPE', None) or os.getenv('TEAMS_MEETING_LINK_TYPE') or os.getenv('teams_meeting_link_type') or 'dynamic').lower().strip()
     if link_type == 'static':
-        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or os.getenv('static_teams_meet_link') or '').strip()
+        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or '').strip()
         if static_link:
             return static_link
 

@@ -97,4 +97,4 @@ class Config:
     BOT_JOIN_LEAD_MINUTES = int(os.getenv("BOT_JOIN_LEAD_MINUTES", "0"))
     # Teams Meeting Link Mode ('dynamic' or 'static')
     TEAMS_MEETING_LINK_TYPE = (os.getenv("TEAMS_MEETING_LINK_TYPE") or os.getenv("teams_meeting_link_type") or "dynamic").lower().strip()
-    STATIC_TEAMS_MEET_LINK = (os.getenv("STATIC_TEAMS_MEET_LINK") or os.getenv("static_teams_meet_link") or "https://teams.live.com/meet/9353487105948?p=hmixuEyH0HCRPsOLwk").strip()
+    STATIC_TEAMS_MEET_LINK = (os.getenv("STATIC_TEAMS_MEET_LINK") or "").strip()

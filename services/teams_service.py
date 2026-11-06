@@ -49,7 +49,7 @@ def create_open_teams_meeting(subject="Dynamic Open Meeting Room", start_dt=None
     from config import Config
     link_type = (getattr(Config, 'TEAMS_MEETING_LINK_TYPE', None) or os.getenv('TEAMS_MEETING_LINK_TYPE') or os.getenv('teams_meeting_link_type') or 'dynamic').lower().strip()
     if link_type == 'static':
-        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or os.getenv('static_teams_meet_link') or '').strip()
+        static_link = (getattr(Config, 'STATIC_TEAMS_MEET_LINK', None) or os.getenv('STATIC_TEAMS_MEET_LINK') or '').strip()
         if static_link:
             logger.info(f"Using configured static Teams meeting link: {static_link}")
             return static_link
