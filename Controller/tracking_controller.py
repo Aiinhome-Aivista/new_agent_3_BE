@@ -59,7 +59,7 @@ def update_completion():
                 pass
 
         from services.tracking_service import update_completion_service
-        update_completion_service(data['plan_id'], data['topic'], data['completion_percent'], updated_by=stakeholder_id)
+        update_completion_service(data['plan_id'], data['topic'], data['completion_percent'], updated_by=stakeholder_id, day_label=data.get('day_label'))
         
         # Trigger Final Assessment email reminder check if plan topics completed
         try:
@@ -88,6 +88,12 @@ def get_plan_summary(plan_id):
 @tracking_bp.route('/plan/<int:plan_id>/topics', methods=['GET'])
 def get_plan_topics(plan_id):
     try:
+        try:
+            from services.tracking_service import sync_plan_completion_from_schedule
+            sync_plan_completion_from_schedule(plan_id)
+        except Exception as sync_err:
+            print(f"Error syncing schedule in get_plan_topics: {sync_err}")
+
         query = "SELECT * FROM completion_tracking WHERE plan_id = %s"
         topics = execute_query(query, (plan_id,))
         return jsonify({"success": True, "data": topics}), 200

@@ -713,6 +713,23 @@ def update_meeting_status(id):
                 pass
         query = "UPDATE meetings SET status = %s WHERE id = %s"
         execute_write(query, (data['status'], id))
+
+        # Sync completion tracking for this meeting's plan/day
+        try:
+            from services.tracking_service import sync_meeting_topics_to_tracking
+            sync_meeting_topics_to_tracking(id, data['status'])
+        except Exception as sync_err:
+            print(f"Error syncing tracking on meeting status update: {sync_err}")
+
+        # Trigger Final Assessment email reminder check if meeting completed
+        if data.get('status') == 'completed':
+            try:
+                m_row = execute_query("SELECT plan_id FROM meetings WHERE id = %s", (id,))
+                if m_row and m_row[0].get('plan_id'):
+                    from services.notification_service import trigger_final_assessment_reminder
+                    trigger_final_assessment_reminder(m_row[0]['plan_id'])
+            except Exception:
+                pass
         if data.get('status') == 'cancelled':
             try:
                 from services.bot.scheduler_service import MeetingSchedulerService

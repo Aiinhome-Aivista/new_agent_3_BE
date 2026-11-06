@@ -313,27 +313,7 @@ class AnalysisEngine:
         except Exception as persist_err:
             logger.error(f"Error persisting intelligence data: {persist_err}", exc_info=True)
 
-        # 8. Update Topic Completion Tracking if plan has topics
-        try:
-            if plan_id:
-                topics = execute_query(
-                    "SELECT topic_name FROM plan_topics WHERE plan_id = %s",
-                    (plan_id,)
-                )
-                if topics:
-                    for t in topics:
-                        t_name = t.get("topic_name")
-                        if t_name:
-                            execute_write(
-                                """INSERT INTO completion_tracking (plan_id, topic, completion_percent)
-                                   VALUES (%s, %s, 100)
-                                   ON DUPLICATE KEY UPDATE completion_percent = 100""",
-                                (plan_id, t_name)
-                            )
-        except Exception as ct_err:
-            logger.debug(f"Completion tracking update note: {ct_err}")
-
-        # 9. Mark Meeting status as 'completed'
+        # 8. Mark Meeting status as 'completed'
         try:
             execute_write("UPDATE meetings SET status = 'completed' WHERE id = %s", (meeting_id,))
             execute_write(
@@ -343,6 +323,13 @@ class AnalysisEngine:
             logger.info(f"Meeting #{meeting_id} status updated to 'completed'.")
         except Exception as st_err:
             logger.error(f"Failed to update meeting status: {st_err}")
+
+        # 9. Update Topic Completion Tracking for this completed meeting
+        try:
+            from services.tracking_service import sync_meeting_topics_to_tracking
+            sync_meeting_topics_to_tracking(meeting_id, 'completed')
+        except Exception as ct_err:
+            logger.debug(f"Completion tracking update note: {ct_err}")
 
         # 10. Generate PDF Intelligence Report
         pdf_path = None
