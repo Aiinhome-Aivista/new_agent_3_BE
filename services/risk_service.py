@@ -271,6 +271,116 @@ def update_risk_status_service(risk_id, status):
     execute_write(query, (status, risk_id))
     return True
 
+def get_risk_suggestion_service(risk_id, force_refresh=False):
+    risk_query = "SELECT * FROM risks WHERE id = %s"
+    risk_res = execute_query(risk_query, (risk_id,))
+    if not risk_res:
+        raise Exception("Risk not found")
+    risk = risk_res[0]
+    
+    # Check if cached suggestion exists and force_refresh is False
+    if not force_refresh and risk.get('ai_suggestion'):
+        cached_str = risk.get('ai_suggestion')
+        try:
+            parsed = json.loads(cached_str) if isinstance(cached_str, str) else cached_str
+            if isinstance(parsed, dict) and "suggestions" in parsed and parsed["suggestions"]:
+                return {"suggestion": parsed, "cached": True, "risk": risk}
+        except Exception:
+            pass
+
+    # Gather context
+    plan_id = risk.get('plan_id')
+    plan_query = "SELECT application_name, scope_description FROM kt_plans WHERE id = %s"
+    plan_res = execute_query(plan_query, (plan_id,))
+    plan_name = plan_res[0]['application_name'] if plan_res else f"Plan {plan_id}"
+    scope_desc = plan_res[0].get('scope_description') if plan_res else ""
+
+    # Assigned stakeholders
+    assignees_query = """
+        SELECT s.name, s.role 
+        FROM risk_assignments ra
+        JOIN stakeholders s ON ra.stakeholder_id = s.id
+        WHERE ra.risk_id = %s
+    """
+    assignees = execute_query(assignees_query, (risk_id,))
+    assigned_str = ", ".join([f"{a['name']} ({a['role']})" for a in assignees]) if assignees else "None"
+
+    # Comments
+    comments_query = """
+        SELECT rc.comment_text, s.name as stakeholder_name 
+        FROM risk_comments rc
+        JOIN stakeholders s ON rc.stakeholder_id = s.id
+        WHERE rc.risk_id = %s
+        ORDER BY rc.created_at ASC
+    """
+    comments = execute_query(comments_query, (risk_id,))
+    comments_str = "; ".join([f"{c['stakeholder_name']}: {c['comment_text']}" for c in comments]) if comments else "None"
+
+    prompt = load_prompt(
+        "risk_suggestion.txt",
+        plan_name=plan_name,
+        scope_description=scope_desc or "N/A",
+        severity=str(risk.get('severity', 'medium')).upper(),
+        description=risk.get('description', ''),
+        assigned_stakeholders=assigned_str,
+        existing_comments=comments_str
+    )
+
+    llm_response = call_llm(prompt)
+
+    parsed = None
+    try:
+        clean_text = (llm_response or "").strip()
+        if "```json" in clean_text:
+            clean_text = clean_text.split("```json", 1)[1]
+            clean_text = clean_text.split("```", 1)[0]
+        elif "```" in clean_text:
+            clean_text = clean_text.split("```", 1)[1]
+            clean_text = clean_text.split("```", 1)[0]
+        clean_text = clean_text.strip()
+        data = json.loads(clean_text)
+        if isinstance(data, list):
+            parsed = {"suggestions": data}
+        elif isinstance(data, dict):
+            if "suggestions" in data and isinstance(data["suggestions"], list):
+                parsed = {"suggestions": data["suggestions"]}
+            elif "action_steps" in data and isinstance(data["action_steps"], list):
+                parsed = {"suggestions": data["action_steps"]}
+            else:
+                suggestions_list = []
+                for v in data.values():
+                    if isinstance(v, list):
+                        suggestions_list.extend([str(item) for item in v])
+                    elif isinstance(v, str) and len(v) > 10:
+                        suggestions_list.append(v)
+                parsed = {"suggestions": suggestions_list}
+        else:
+            parsed = {"suggestions": [str(data)]}
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to parse LLM suggestion JSON for risk {risk_id}: {e}")
+        lines = [
+            line.strip().lstrip("-*123456789. ")
+            for line in (llm_response or "").splitlines()
+            if line.strip() and not line.strip().startswith("{") and not line.strip().startswith("}")
+        ]
+        parsed = {
+            "suggestions": lines[:5] if lines else [
+                "Schedule a direct 1-on-1 alignment session with the responsible stakeholder.",
+                "Review session recording and share summary notes and action items.",
+                "Set a clear completion deadline and verify progress in the next KT check-in."
+            ]
+        }
+
+    # Store in database
+    try:
+        execute_write("UPDATE risks SET ai_suggestion = %s WHERE id = %s", (json.dumps(parsed), risk_id))
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to cache ai_suggestion to risks table: {e}")
+
+    return {"suggestion": parsed, "cached": False, "risk": risk}
+
 def sort_risks_ui_order(risks):
     def get_risk_day(r):
         val = r.get('created_at') or r.get('date')

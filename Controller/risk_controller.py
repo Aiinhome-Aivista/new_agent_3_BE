@@ -149,3 +149,24 @@ def update_risk_status(id):
         return jsonify({"success": True, "message": "Risk status updated"}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@risk_bp.route('/<int:id>/suggestions', methods=['GET', 'POST'])
+def get_risk_suggestions(id):
+    try:
+        force_refresh = False
+        if request.method == 'POST':
+            body = request.get_json(silent=True) or {}
+            force_refresh = bool(body.get('force_refresh', False))
+        else:
+            force_refresh = request.args.get('force_refresh', '').lower() in ('true', '1', 'yes')
+            
+        from services.risk_service import get_risk_suggestion_service
+        result = get_risk_suggestion_service(id, force_refresh=force_refresh)
+        return jsonify({
+            "success": True,
+            "data": result['suggestion'],
+            "cached": result.get('cached', False),
+            "risk": result.get('risk')
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
